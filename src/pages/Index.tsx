@@ -1318,15 +1318,64 @@ function AdminView() {
     fetchData(passwordRef.current, t);
   };
 
+  // Запрос разрешения на push-уведомления при входе
+  useEffect(() => {
+    if (authed && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, [authed]);
+
+  const prevWdCountRef = useRef<number | null>(null);
+
+  const playBeep = () => {
+    try {
+      const AudioCtx = window.AudioContext || (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = 880;
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(0.4, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.6);
+    } catch { /* браузер заблокировал */ }
+  };
+
+  const notifyNewWithdrawal = (count: number) => {
+    playBeep();
+    if ('Notification' in window && Notification.permission === 'granted') {
+      new Notification('💸 Новая заявка на вывод!', {
+        body: `Всего ожидает: ${count} заявок`,
+        icon: '/favicon.ico',
+      });
+    }
+    toast('💸 Новая заявка на вывод!', { description: `Ожидает обработки: ${count}` });
+  };
+
   // Автообновление каждые 30 секунд пока залогинен
   useEffect(() => {
     if (!authed) return;
-    const interval = window.setInterval(() => {
+    const interval = window.setInterval(async () => {
+      // Загружаем данные
       fetchData(passwordRef.current, tab, filter);
-      fetchStats(passwordRef.current);
+      // Проверяем статистику и сравниваем кол-во pending
+      const res = await fetch(`${ADMIN_API}?type=stats`, { headers: { 'X-Admin-Password': passwordRef.current } });
+      if (res.ok) {
+        const data = await res.json();
+        setStats(data);
+        const newPending: number = data.wd_pending_count || 0;
+        if (prevWdCountRef.current !== null && newPending > prevWdCountRef.current) {
+          notifyNewWithdrawal(newPending);
+        }
+        prevWdCountRef.current = newPending;
+      }
     }, 30000);
     return () => clearInterval(interval);
-  }, [authed, tab, filter, fetchData, fetchStats]);
+  }, [authed, tab, filter, fetchData]);
 
   const updateStatus = async (id: number, status: string) => {
     setUpdating(id);
