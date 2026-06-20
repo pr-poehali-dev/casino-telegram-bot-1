@@ -23,6 +23,7 @@ export interface PaymentPayload {
   userPhone: string;
   userAddress?: string;
   orderComment?: string;
+  sessionId?: string;
   cartItems: CartItem[];
   successUrl?: string;
   failUrl?: string;
@@ -83,6 +84,7 @@ export function useRobokassa(options: UseRobokassaOptions): UseRobokassaReturn {
             user_phone: payload.userPhone,
             user_address: payload.userAddress,
             order_comment: payload.orderComment,
+            session_id: payload.sessionId,
             cart_items: payload.cartItems,
             success_url: payload.successUrl,
             fail_url: payload.failUrl,

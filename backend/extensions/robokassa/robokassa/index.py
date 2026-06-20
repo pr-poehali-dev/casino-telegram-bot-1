@@ -65,6 +65,7 @@ def handler(event: dict, context) -> dict:
         cart_items = payload.get('cart_items', [])
         success_url = str(payload.get('success_url', ''))
         fail_url = str(payload.get('fail_url', ''))
+        session_id = str(payload.get('session_id', ''))
 
         if amount <= 0:
             return {'statusCode': 400, 'headers': HEADERS, 'body': json.dumps({'error': 'Amount must be greater than 0'}), 'isBase64Encoded': False}
@@ -84,10 +85,10 @@ def handler(event: dict, context) -> dict:
         order_number = f"ORD-{datetime.now().strftime('%Y%m%d')}-{robokassa_inv_id}"
 
         cur.execute("""
-            INSERT INTO orders (order_number, user_name, user_email, user_phone, amount, robokassa_inv_id, status, delivery_address, order_comment)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO orders (order_number, user_name, user_email, user_phone, amount, robokassa_inv_id, status, delivery_address, order_comment, session_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
-        """, (order_number, user_name, user_email, user_phone, round(amount, 2), robokassa_inv_id, 'pending', user_address, order_comment))
+        """, (order_number, user_name, user_email, user_phone, round(amount, 2), robokassa_inv_id, 'pending', user_address, order_comment, session_id or None))
 
         order_id = cur.fetchone()[0]
 

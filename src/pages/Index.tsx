@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useRobokassa, openPaymentPage } from '@/components/extensions/robokassa/useRobokassa';
 import Icon from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
@@ -106,7 +106,7 @@ export default function Index() {
             <>
               {section === 'home' && <HomeView balance={balance} setSection={setSection} openGame={openGame} notify={notify} />}
               {section === 'games' && <GamesView openGame={openGame} />}
-              {section === 'deposit' && <DepositView notify={notify} />}
+              {section === 'deposit' && <DepositView notify={notify} onBalanceChange={(delta) => setBalance((b) => b + delta)} />}
               {section === 'withdraw' && <WithdrawView balance={balance} notify={notify} />}
               {section === 'stats' && <StatsView />}
               {section === 'profile' && <ProfileView setSection={setSection} notify={notify} />}
@@ -290,10 +290,11 @@ const DEPOSIT_METHODS = [
 ];
 
 const ROBOKASSA_API = 'https://functions.poehali.dev/ed14271a-993b-4abb-a021-fd5ba53c863d';
+const ORDER_STATUS_API = 'https://functions.poehali.dev/c33b0e83-4616-4a6e-a9fd-18de4f0b2b09';
 
-type DepositStep = 'method' | 'amount' | 'user-info' | 'crypto-form' | 'redirecting';
+type DepositStep = 'method' | 'amount' | 'user-info' | 'crypto-form' | 'redirecting' | 'waiting' | 'success';
 
-function DepositView({ notify: _notify }: { notify: (m: string) => void }) {
+function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string) => void; onBalanceChange: (delta: number) => void }) {
   const [step, setStep] = useState<DepositStep>('method');
   const [method, setMethod] = useState<typeof DEPOSIT_METHODS[0] | null>(null);
   const [amount, setAmount] = useState(1000);
@@ -301,6 +302,10 @@ function DepositView({ notify: _notify }: { notify: (m: string) => void }) {
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [userPhone, setUserPhone] = useState('');
+  const [paidAmount, setPaidAmount] = useState(0);
+  const [orderNumber, setOrderNumber] = useState('');
+  const sessionIdRef = useRef('');
+  const pollRef = useRef<number | null>(null);
 
   const finalAmount = customAmount ? parseInt(customAmount) || 0 : amount;
 
@@ -309,8 +314,51 @@ function DepositView({ notify: _notify }: { notify: (m: string) => void }) {
     onError: (err) => toast.error('Ошибка создания платежа: ' + err.message),
   });
 
+  // Поллинг статуса после редиректа
+  const startPolling = useCallback((sid: string) => {
+    setStep('waiting');
+    let attempts = 0;
+    const poll = async () => {
+      try {
+        const res = await fetch(`${ORDER_STATUS_API}?session_id=${sid}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.status === 'paid') {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setPaidAmount(data.amount);
+            setOrderNumber(data.order_number);
+            onBalanceChange(data.amount);
+            setStep('success');
+            return;
+          }
+        }
+      } catch { /* сеть — пробуем снова */ }
+      attempts++;
+      if (attempts >= 60) { // 5 минут (5s * 60)
+        if (pollRef.current) clearInterval(pollRef.current);
+        setStep('method');
+        toast.error('Платёж не подтверждён. Обратитесь в поддержку.');
+      }
+    };
+    pollRef.current = window.setInterval(poll, 5000);
+    poll();
+  }, [onBalanceChange]);
+
+  useEffect(() => {
+    // При возврате со страницы Robokassa — запускаем поллинг
+    const sid = sessionIdRef.current;
+    const onFocus = () => { if (sid && step === 'redirecting') startPolling(sid); };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [step, startPolling]);
+
   const handlePay = useCallback(async () => {
     if (!method) return;
+    const sid = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    sessionIdRef.current = sid;
     try {
       setStep('redirecting');
       const result = await createPayment({
@@ -318,26 +366,111 @@ function DepositView({ notify: _notify }: { notify: (m: string) => void }) {
         userName: userName || 'Игрок',
         userEmail,
         userPhone,
+        sessionId: sid,
         cartItems: [{ id: 'deposit', name: `Пополнение баланса (${method.name})`, price: finalAmount, quantity: 1 }],
         successUrl: window.location.href,
         failUrl: window.location.href,
         orderComment: `Пополнение через ${method.name}`,
       });
       openPaymentPage(result.payment_url);
+      // Через 3 сек запускаем поллинг (пользователь ушёл на оплату)
+      setTimeout(() => startPolling(sid), 3000);
     } catch {
       setStep('user-info');
     }
-  }, [method, finalAmount, userName, userEmail, userPhone, createPayment]);
+  }, [method, finalAmount, userName, userEmail, userPhone, createPayment, startPolling]);
 
   const reset = () => {
+    if (pollRef.current) clearInterval(pollRef.current);
     setStep('method');
     setMethod(null);
     setCustomAmount('');
     setAmount(1000);
     setUserName(''); setUserEmail(''); setUserPhone('');
+    sessionIdRef.current = '';
   };
 
   const inputCls = 'w-full bg-background/60 border border-gold/20 rounded-xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-foreground placeholder:text-muted-foreground/50';
+
+  // ── SUCCESS ──
+  if (step === 'success') {
+    return (
+      <div className="space-y-5">
+        <SectionTitle title="Пополнение" subtitle="Баланс пополнен" icon="ArrowDownToLine" />
+        <div className="animate-win-pop glass rounded-3xl p-8 flex flex-col items-center gap-5 text-center glow-soft">
+          <div className="w-24 h-24 rounded-full gold-gradient flex items-center justify-center glow-gold">
+            <Icon name="CheckCheck" size={40} className="text-background" />
+          </div>
+          <div>
+            <h3 className="font-display text-3xl font-bold gold-text">Оплачено!</h3>
+            <p className="text-muted-foreground text-sm mt-1">Баланс пополнен успешно</p>
+          </div>
+          <div className="w-full glass rounded-2xl p-5 space-y-3">
+            <div className="font-display text-4xl font-bold gold-text tabular-nums">
+              +{paidAmount.toLocaleString('ru')} ₽
+            </div>
+            <div className="text-xs text-muted-foreground">зачислено на счёт</div>
+            <div className="w-full h-px bg-gold/10" />
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Заказ</span>
+              <span className="font-mono text-xs">{orderNumber}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Способ</span>
+              <span className="font-medium">{method?.name}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Статус</span>
+              <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                <Icon name="Check" size={13} /> Подтверждено
+              </span>
+            </div>
+          </div>
+          <Button onClick={reset} className="w-full gold-gradient text-background font-bold h-12 glow-gold">
+            <Icon name="Plus" size={18} className="mr-2" /> Пополнить ещё
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── WAITING (поллинг после оплаты) ──
+  if (step === 'waiting') {
+    return (
+      <div className="space-y-5">
+        <SectionTitle title="Пополнение" subtitle="Ожидаем подтверждения" icon="ArrowDownToLine" />
+        <div className="glass rounded-3xl p-10 flex flex-col items-center gap-5 text-center glow-soft">
+          <div className="relative w-24 h-24">
+            <div className="absolute inset-0 rounded-full gold-gradient opacity-20 animate-ping" />
+            <div className="relative w-24 h-24 rounded-full gold-gradient flex items-center justify-center glow-gold">
+              <Icon name="Clock" size={36} className="text-background" />
+            </div>
+          </div>
+          <div>
+            <h3 className="font-display text-xl font-bold gold-text">Ждём подтверждения</h3>
+            <p className="text-muted-foreground text-sm mt-1">Проверяем статус платежа каждые 5 секунд</p>
+          </div>
+          <div className="w-full glass rounded-xl p-4 space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Сумма</span>
+              <span className="font-display font-bold gold-text">{finalAmount.toLocaleString('ru')} ₽</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Способ</span>
+              <span>{method?.name}</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-gold/70 text-xs">
+            <Icon name="Loader" size={14} className="animate-spin" />
+            Баланс зачислится автоматически после оплаты
+          </div>
+          <button onClick={reset} className="text-xs text-muted-foreground underline underline-offset-2 mt-2">
+            Отменить и вернуться
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // ── REDIRECTING ──
   if (step === 'redirecting') {

@@ -1,0 +1,12 @@
+{
+  "tests": [
+    {
+      "name": "Missing session_id returns 400",
+      "method": "GET",
+      "path": "/",
+      "expectedStatus": 400,
+      "expectedBody": {"error": "session_id required"},
+      "bodyMatcher": "partial"
+    }
+  ]
+}
