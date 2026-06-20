@@ -1318,6 +1318,16 @@ function AdminView() {
     fetchData(passwordRef.current, t);
   };
 
+  // Автообновление каждые 30 секунд пока залогинен
+  useEffect(() => {
+    if (!authed) return;
+    const interval = window.setInterval(() => {
+      fetchData(passwordRef.current, tab, filter);
+      fetchStats(passwordRef.current);
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [authed, tab, filter, fetchData, fetchStats]);
+
   const updateStatus = async (id: number, status: string) => {
     setUpdating(id);
     try {
