@@ -1267,11 +1267,17 @@ function AdminView() {
   const [tab, setTab] = useState<'withdrawals' | 'orders'>('withdrawals');
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [stats, setStats] = useState<Record<string, number> | null>(null);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState('');
   const [updating, setUpdating] = useState<number | null>(null);
   const [selected, setSelected] = useState<Withdrawal | null>(null);
   const passwordRef = useRef('');
+
+  const fetchStats = useCallback(async (pwd: string) => {
+    const res = await fetch(`${ADMIN_API}?type=stats`, { headers: { 'X-Admin-Password': pwd } });
+    if (res.ok) setStats(await res.json());
+  }, []);
 
   const fetchData = useCallback(async (pwd: string, type: 'withdrawals' | 'orders', statusFilter = '') => {
     setLoading(true);
@@ -1298,8 +1304,8 @@ function AdminView() {
       passwordRef.current = password;
       setWithdrawals(data.withdrawals || []);
       setAuthed(true);
-      // Подгружаем пополнения сразу
       fetchData(password, 'orders');
+      fetchStats(password);
     } finally {
       setLoading(false);
     }
@@ -1442,11 +1448,54 @@ function AdminView() {
       {/* Заголовок */}
       <div className="flex items-center justify-between">
         <SectionTitle title="Админ" subtitle="Панель управления" icon="ShieldCheck" />
-        <button onClick={() => fetchData(passwordRef.current, tab, filter)}
+        <button onClick={() => { fetchData(passwordRef.current, tab, filter); fetchStats(passwordRef.current); }}
           className="w-9 h-9 glass rounded-xl flex items-center justify-center text-gold">
           <Icon name="RefreshCw" size={16} />
         </button>
       </div>
+
+      {/* Статистика */}
+      {stats && (
+        <div className="grid grid-cols-2 gap-2">
+          <div className="glass rounded-2xl p-4 space-y-3">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider">
+              <Icon name="ArrowDownToLine" size={12} className="text-emerald-400" /> Пополнения
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground">Сегодня</div>
+              <div className="font-display font-bold text-emerald-400">+{(stats.orders_today_sum || 0).toLocaleString('ru')} ₽</div>
+              <div className="text-xs text-muted-foreground/60">{stats.orders_today_count} платежей</div>
+            </div>
+            <div className="w-full h-px bg-gold/10" />
+            <div>
+              <div className="text-xs text-muted-foreground">Всё время</div>
+              <div className="font-display font-bold gold-text">+{(stats.orders_total_sum || 0).toLocaleString('ru')} ₽</div>
+              <div className="text-xs text-muted-foreground/60">{stats.orders_total_count} платежей</div>
+            </div>
+          </div>
+          <div className="glass rounded-2xl p-4 space-y-3">
+            <div className="flex items-center gap-2 text-xs text-muted-foreground uppercase tracking-wider">
+              <Icon name="ArrowUpFromLine" size={12} className="text-red-400" /> Выводы
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground">Сегодня</div>
+              <div className="font-display font-bold text-red-400">−{(stats.wd_today_sum || 0).toLocaleString('ru')} ₽</div>
+              <div className="text-xs text-muted-foreground/60">{stats.wd_today_count} заявок</div>
+            </div>
+            <div className="w-full h-px bg-gold/10" />
+            <div>
+              <div className="text-xs text-muted-foreground">Всё время</div>
+              <div className="font-display font-bold gold-text">−{(stats.wd_total_sum || 0).toLocaleString('ru')} ₽</div>
+              <div className="text-xs text-muted-foreground/60 flex items-center gap-1">
+                {stats.wd_total_count} заявок
+                {stats.wd_pending_count > 0 && (
+                  <span className="text-amber-400 font-semibold">· {stats.wd_pending_count} ожидают</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Вкладки */}
       <div className="grid grid-cols-2 gap-2">

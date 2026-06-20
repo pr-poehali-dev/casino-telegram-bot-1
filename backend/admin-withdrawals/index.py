@@ -56,6 +56,41 @@ def handler(event: dict, context) -> dict:
         status_filter = params.get('status', '')
         data_type = params.get('type', 'withdrawals')
 
+        # Сводная статистика
+        if data_type == 'stats':
+            cur.execute("""
+                SELECT
+                    COUNT(*) FILTER (WHERE status = 'paid')                          AS orders_total_count,
+                    COALESCE(SUM(amount) FILTER (WHERE status = 'paid'), 0)          AS orders_total_sum,
+                    COUNT(*) FILTER (WHERE status = 'paid' AND DATE(created_at) = CURRENT_DATE)       AS orders_today_count,
+                    COALESCE(SUM(amount) FILTER (WHERE status = 'paid' AND DATE(created_at) = CURRENT_DATE), 0) AS orders_today_sum
+                FROM orders
+            """)
+            o = cur.fetchone()
+            cur.execute("""
+                SELECT
+                    COUNT(*)                                                          AS wd_total_count,
+                    COALESCE(SUM(amount), 0)                                         AS wd_total_sum,
+                    COUNT(*) FILTER (WHERE DATE(created_at) = CURRENT_DATE)          AS wd_today_count,
+                    COALESCE(SUM(amount) FILTER (WHERE DATE(created_at) = CURRENT_DATE), 0) AS wd_today_sum,
+                    COUNT(*) FILTER (WHERE status = 'pending')                       AS wd_pending_count
+                FROM withdrawals
+            """)
+            w = cur.fetchone()
+            cur.close()
+            conn.close()
+            return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+                'orders_total_count':  int(o[0]),
+                'orders_total_sum':    float(o[1]),
+                'orders_today_count':  int(o[2]),
+                'orders_today_sum':    float(o[3]),
+                'wd_total_count':      int(w[0]),
+                'wd_total_sum':        float(w[1]),
+                'wd_today_count':      int(w[2]),
+                'wd_today_sum':        float(w[3]),
+                'wd_pending_count':    int(w[4]),
+            }), 'isBase64Encoded': False}
+
         # Пополнения (orders)
         if data_type == 'orders':
             if status_filter:
