@@ -212,6 +212,23 @@
     transform: rotateY(1800deg);
   }
 }
+@keyframes coin-flip-3d {
+  0% {
+    transform: rotateY(0deg) translateY(0px);
+  }
+  25% {
+    transform: rotateY(180deg) translateY(-30px);
+  }
+  50% {
+    transform: rotateY(360deg) translateY(0px);
+  }
+  75% {
+    transform: rotateY(540deg) translateY(-20px);
+  }
+  100% {
+    transform: rotateY(720deg) translateY(0px);
+  }
+}
 @keyframes win-pop {
   0% {
     transform: scale(0.6);

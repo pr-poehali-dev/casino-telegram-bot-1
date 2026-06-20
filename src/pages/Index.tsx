@@ -3,6 +3,7 @@ import Icon from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import SlotsGame from '@/components/SlotsGame';
+import CoinGame from '@/components/CoinGame';
 
 type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support';
 
@@ -33,8 +34,8 @@ export default function Index() {
   const notify = (msg: string) => toast(msg, { description: 'Эта функция настраивается отдельно — напишите детали.' });
 
   const openGame = (id: string, name: string) => {
-    if (id === 'slots') {
-      setActiveGame('slots');
+    if (id === 'slots' || id === 'coin') {
+      setActiveGame(id);
     } else {
       notify(`Открываю «${name}»`);
     }
@@ -69,6 +70,12 @@ export default function Index() {
         <main className="flex-1 px-5 py-6 pb-28">
           {activeGame === 'slots' ? (
             <SlotsGame
+              balance={balance}
+              onBalanceChange={(delta) => setBalance((b) => b + delta)}
+              onBack={() => setActiveGame(null)}
+            />
+          ) : activeGame === 'coin' ? (
+            <CoinGame
               balance={balance}
               onBalanceChange={(delta) => setBalance((b) => b + delta)}
               onBack={() => setActiveGame(null)}
