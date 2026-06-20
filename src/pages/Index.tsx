@@ -601,7 +601,20 @@ function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string)
                 onChange={e => setUserTelegram(e.target.value.replace('@', ''))}
               />
             </div>
-            <p className="text-xs text-muted-foreground/50 mt-1">Получишь подтверждение об оплате в Telegram</p>
+            <div className="mt-2 glass rounded-xl p-3 flex items-center gap-3">
+              <Icon name="MessageCircle" size={16} className="text-[#29a0d8] shrink-0" />
+              <p className="text-xs text-muted-foreground flex-1">
+                Чтобы бот смог написать тебе — сначала нажми <span className="text-foreground font-medium">Старт</span>
+              </p>
+              <a
+                href="https://t.me/Luxxeecassinnobot"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-[#29a0d8]/20 text-[#29a0d8] hover:bg-[#29a0d8]/30 transition-colors flex items-center gap-1"
+              >
+                <Icon name="Send" size={12} /> Открыть бота
+              </a>
+            </div>
           </div>
         </div>
 
