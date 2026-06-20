@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import SlotsGame from '@/components/SlotsGame';
 import CoinGame from '@/components/CoinGame';
 import DiceGame from '@/components/DiceGame';
+import RouletteGame from '@/components/RouletteGame';
 
 type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support';
 
@@ -35,7 +36,7 @@ export default function Index() {
   const notify = (msg: string) => toast(msg, { description: 'Эта функция настраивается отдельно — напишите детали.' });
 
   const openGame = (id: string, name: string) => {
-    if (id === 'slots' || id === 'coin' || id === 'dice') {
+    if (id === 'slots' || id === 'coin' || id === 'dice' || id === 'roulette') {
       setActiveGame(id);
     } else {
       notify(`Открываю «${name}»`);
@@ -83,6 +84,12 @@ export default function Index() {
             />
           ) : activeGame === 'dice' ? (
             <DiceGame
+              balance={balance}
+              onBalanceChange={(delta) => setBalance((b) => b + delta)}
+              onBack={() => setActiveGame(null)}
+            />
+          ) : activeGame === 'roulette' ? (
+            <RouletteGame
               balance={balance}
               onBalanceChange={(delta) => setBalance((b) => b + delta)}
               onBack={() => setActiveGame(null)}
