@@ -9,7 +9,7 @@ import DiceGame from '@/components/DiceGame';
 import RouletteGame from '@/components/RouletteGame';
 import BlackjackGame from '@/components/BlackjackGame';
 
-type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin';
+type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral';
 
 const GAMES = [
   { id: 'roulette', name: 'Рулетка', icon: 'CircleDot', desc: 'Красное или чёрное', accent: 'crimson', emoji: '🎡' },
@@ -33,7 +33,7 @@ const accentColor = (a: string) =>
 const AUTH_API = 'https://functions.poehali.dev/e956557c-ce79-4797-8cec-5934cb2924d8';
 const AUTH_TOKEN_KEY = 'casino_auth_token';
 
-interface AuthUser { id: number; email: string; username: string; balance: number; }
+interface AuthUser { id: number; email: string; username: string; balance: number; referral_code?: string; }
 
 export default function Index() {
   const [section, setSection] = useState<Section>('home');
@@ -186,6 +186,7 @@ export default function Index() {
               {section === 'profile' && <ProfileView setSection={setSection} notify={notify} user={user} onLogout={handleLogout} />}
               {section === 'support' && <SupportView notify={notify} />}
               {section === 'admin' && <AdminView onPendingChange={setPendingWithdrawals} />}
+              {section === 'referral' && <ReferralView user={user} onBack={() => setSection('profile')} />}
             </>
           )}
         </main>
@@ -1215,9 +1216,10 @@ function ProfileView({ setSection, notify, user, onLogout }: { setSection: (s: S
     tapTimer.current = window.setTimeout(() => setTapCount(0), 1500);
   };
 
-  const items: { name: string; icon: string; action: () => void; danger?: boolean }[] = [
+  const items: { name: string; icon: string; action: () => void; danger?: boolean; highlight?: boolean }[] = [
     { name: 'Пополнить баланс', icon: 'Wallet', action: () => setSection('deposit') },
     { name: 'Вывод средств', icon: 'ArrowUpFromLine', action: () => setSection('withdraw') },
+    { name: 'Пригласить друга', icon: 'UserPlus', action: () => setSection('referral'), highlight: true },
     { name: 'Статистика', icon: 'TrendingUp', action: () => setSection('stats') },
     { name: 'Поддержка', icon: 'Headphones', action: () => setSection('support') },
     { name: 'Настройки', icon: 'Settings', action: () => notify('Открываю настройки') },
@@ -1247,10 +1249,10 @@ function ProfileView({ setSection, notify, user, onLogout }: { setSection: (s: S
             className="animate-float-up w-full glass rounded-2xl p-4 flex items-center gap-3 hover-lift"
             style={{ animationDelay: `${i * 50}ms` }}
           >
-            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${it.danger ? 'bg-red-500/10 text-red-400' : 'bg-gold/10 text-gold'}`}>
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${it.danger ? 'bg-red-500/10 text-red-400' : it.highlight ? 'gold-gradient text-background' : 'bg-gold/10 text-gold'}`}>
               <Icon name={it.icon} size={20} />
             </div>
-            <span className={`font-medium flex-1 text-left ${it.danger ? 'text-red-400' : ''}`}>{it.name}</span>
+            <span className={`font-medium flex-1 text-left ${it.danger ? 'text-red-400' : it.highlight ? 'gold-text font-semibold' : ''}`}>{it.name}</span>
             <Icon name="ChevronRight" size={18} className="text-muted-foreground" />
           </button>
         ))}
@@ -1289,7 +1291,9 @@ function SupportView({ notify }: { notify: (m: string) => void }) {
 }
 
 function AuthScreen({ onSuccess }: { onSuccess: (token: string, user: AuthUser) => void }) {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+  // Читаем реферальный код из URL ?ref=XXXXXXXX
+  const urlRef = new URLSearchParams(window.location.search).get('ref') || '';
+  const [mode, setMode] = useState<'login' | 'register'>(urlRef ? 'register' : 'login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [username, setUsername] = useState('');
@@ -1306,6 +1310,7 @@ function AuthScreen({ onSuccess }: { onSuccess: (token: string, user: AuthUser) 
       const action = mode === 'login' ? 'login' : 'register';
       const body: Record<string, string> = { email, password };
       if (mode === 'register' && username) body.username = username;
+      if (mode === 'register' && urlRef) body.ref_code = urlRef;
       const res = await fetch(`${AUTH_API}?action=${action}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1334,6 +1339,19 @@ function AuthScreen({ onSuccess }: { onSuccess: (token: string, user: AuthUser) 
             <p className="text-xs text-muted-foreground tracking-[0.3em] uppercase mt-1">Casino</p>
           </div>
         </div>
+
+        {/* Баннер реферала */}
+        {urlRef && (
+          <div className="glass rounded-2xl p-4 flex items-center gap-3 border border-gold/30">
+            <div className="w-10 h-10 rounded-xl gold-gradient flex items-center justify-center shrink-0">
+              <Icon name="Gift" size={18} className="text-background" />
+            </div>
+            <div>
+              <div className="font-semibold text-sm gold-text">Тебя пригласил друг!</div>
+              <div className="text-xs text-muted-foreground">Зарегистрируйся и получи <span className="text-gold font-bold">50 ₽</span> на баланс</div>
+            </div>
+          </div>
+        )}
 
         {/* Переключатель */}
         <div className="grid grid-cols-2 gap-1 glass rounded-2xl p-1">
@@ -1386,6 +1404,119 @@ function AuthScreen({ onSuccess }: { onSuccess: (token: string, user: AuthUser) 
           Продолжая, вы соглашаетесь с правилами казино. 18+
         </p>
       </div>
+    </div>
+  );
+}
+
+function ReferralView({ user, onBack }: { user: AuthUser | null; onBack: () => void }) {
+  const [stats, setStats] = useState<{ referral_code: string; total_referrals: number; total_earned: number; bonuses: { username: string; email: string; amount: number; type: string; created_at: string }[] } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
+
+  const refLink = `${window.location.origin}${window.location.pathname}?ref=${user?.referral_code || ''}`;
+
+  useEffect(() => {
+    const token = localStorage.getItem('casino_auth_token');
+    if (!token) { setLoading(false); return; }
+    fetch(`${AUTH_API}?action=referral`, { headers: { 'X-Auth-Token': token } })
+      .then(r => r.json())
+      .then(setStats)
+      .finally(() => setLoading(false));
+  }, []);
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(refLink).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
+          <Icon name="ArrowLeft" size={20} />
+        </button>
+        <div>
+          <h2 className="font-display text-xl font-bold">Пригласить друга</h2>
+          <p className="text-sm text-muted-foreground">Зарабатывай с каждого реферала</p>
+        </div>
+      </div>
+
+      {/* Условия */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="glass rounded-2xl p-4 text-center space-y-1">
+          <div className="w-10 h-10 rounded-xl gold-gradient flex items-center justify-center mx-auto">
+            <Icon name="UserPlus" size={18} className="text-background" />
+          </div>
+          <div className="font-display font-bold text-lg gold-text">50 ₽</div>
+          <div className="text-xs text-muted-foreground">другу при регистрации</div>
+        </div>
+        <div className="glass rounded-2xl p-4 text-center space-y-1">
+          <div className="w-10 h-10 rounded-xl gold-gradient flex items-center justify-center mx-auto">
+            <Icon name="Percent" size={18} className="text-background" />
+          </div>
+          <div className="font-display font-bold text-lg gold-text">15%</div>
+          <div className="text-xs text-muted-foreground">тебе с каждого пополнения</div>
+        </div>
+      </div>
+
+      {/* Ссылка */}
+      <div className="glass rounded-2xl p-4 space-y-3">
+        <p className="text-xs text-muted-foreground uppercase tracking-wider">Твоя реферальная ссылка</p>
+        <div className="bg-background/40 rounded-xl px-3 py-2.5 text-xs font-mono text-muted-foreground break-all">
+          {refLink}
+        </div>
+        <button onClick={copyLink}
+          className={`w-full h-11 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2
+            ${copied ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'gold-gradient text-background glow-gold'}`}>
+          <Icon name={copied ? 'Check' : 'Copy'} size={16} />
+          {copied ? 'Ссылка скопирована!' : 'Скопировать ссылку'}
+        </button>
+        <button onClick={() => {
+          if (navigator.share) navigator.share({ title: 'LUXE Casino', text: 'Заходи в казино по моей ссылке и получи 50 ₽!', url: refLink });
+        }} className="w-full h-11 rounded-xl font-semibold text-sm glass text-muted-foreground flex items-center justify-center gap-2 hover:text-foreground transition-colors">
+          <Icon name="Share2" size={16} /> Поделиться
+        </button>
+      </div>
+
+      {/* Статистика */}
+      {loading ? (
+        <div className="flex justify-center py-8"><Icon name="Loader" size={24} className="animate-spin text-gold" /></div>
+      ) : stats && (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="glass rounded-2xl p-4 text-center">
+              <div className="font-display text-3xl font-bold gold-text">{stats.total_referrals}</div>
+              <div className="text-xs text-muted-foreground mt-1">рефералов</div>
+            </div>
+            <div className="glass rounded-2xl p-4 text-center">
+              <div className="font-display text-3xl font-bold text-emerald-400">+{stats.total_earned.toLocaleString('ru')} ₽</div>
+              <div className="text-xs text-muted-foreground mt-1">заработано</div>
+            </div>
+          </div>
+
+          {stats.bonuses.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider px-1">История начислений</p>
+              {stats.bonuses.map((b, i) => (
+                <div key={i} className="glass rounded-xl p-3 flex items-center gap-3">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${b.type === 'signup' ? 'bg-gold/10' : 'bg-emerald-500/10'}`}>
+                    <Icon name={b.type === 'signup' ? 'UserPlus' : 'ArrowDownToLine'} size={14} className={b.type === 'signup' ? 'text-gold' : 'text-emerald-400'} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium truncate">{b.username || b.email}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {b.type === 'signup' ? 'Регистрация' : '15% с пополнения'} · {new Date(b.created_at).toLocaleDateString('ru')}
+                    </div>
+                  </div>
+                  <span className="text-emerald-400 font-display font-bold shrink-0">+{b.amount.toLocaleString('ru')} ₽</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

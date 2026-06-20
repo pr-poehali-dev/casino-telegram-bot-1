@@ -127,11 +127,31 @@ def handler(event: dict, context) -> dict:
             return {'statusCode': 200, 'headers': HEADERS, 'body': f'OK{inv_id}', 'isBase64Encoded': False}
         return {'statusCode': 404, 'headers': HEADERS, 'body': 'Order not found', 'isBase64Encoded': False}
 
+    order_id, order_number, user_email, user_name, amount, order_comment = result
+
+    # ── Реферальный бонус: 15% рефереру при пополнении реферала ──
+    try:
+        cur.execute("""
+            SELECT u.id, u.referred_by FROM users u WHERE u.email = %s
+        """, (user_email,))
+        user_row = cur.fetchone()
+        if user_row and user_row[1]:
+            referee_id = user_row[0]
+            referrer_id = user_row[1]
+            bonus = round(float(amount) * 0.15, 2)
+            cur.execute("""
+                UPDATE users SET balance = balance + %s, updated_at = NOW() WHERE id = %s
+            """, (bonus, referrer_id))
+            cur.execute("""
+                INSERT INTO referral_bonuses (referrer_id, referee_id, amount, type, source_amount)
+                VALUES (%s, %s, %s, 'deposit', %s)
+            """, (referrer_id, referee_id, bonus, float(amount)))
+    except Exception:
+        pass
+
     conn.commit()
     cur.close()
     conn.close()
-
-    order_id, order_number, user_email, user_name, amount, order_comment = result
 
     # Парсим Telegram username из order_comment: "... | tg:username"
     player_tg_username = None

@@ -22,7 +22,7 @@ def hash_password(password: str) -> str:
 
 def get_user_by_token(cur, token: str):
     cur.execute("""
-        SELECT u.id, u.email, u.username, u.balance
+        SELECT u.id, u.email, u.username, u.balance, u.referral_code
         FROM sessions s JOIN users u ON s.user_id = u.id
         WHERE s.token = %s AND s.expires_at > NOW()
     """, (token,))
@@ -56,6 +56,7 @@ def handler(event: dict, context) -> dict:
         email = str(body.get('email', '')).lower().strip()
         password = str(body.get('password', ''))
         username = str(body.get('username', '')).strip() or email.split('@')[0]
+        ref_code = str(body.get('ref_code', '')).strip().upper()
 
         if not email or not password:
             cur.close(); conn.close()
@@ -72,11 +73,36 @@ def handler(event: dict, context) -> dict:
             return {'statusCode': 409, 'headers': HEADERS,
                     'body': json.dumps({'error': 'Этот email уже зарегистрирован'}), 'isBase64Encoded': False}
 
+        # Ищем реферера по коду
+        referrer_id = None
+        if ref_code:
+            cur.execute("SELECT id FROM users WHERE referral_code = %s", (ref_code,))
+            ref_row = cur.fetchone()
+            if ref_row:
+                referrer_id = ref_row[0]
+
+        # Стартовый бонус: 50₽ новому если пришёл по ссылке
+        start_balance = 50.0 if referrer_id else 0.0
+
+        # Генерируем уникальный реферальный код для нового пользователя
+        new_ref_code = secrets.token_hex(4).upper()
+
         cur.execute("""
-            INSERT INTO users (email, password_hash, username, balance)
-            VALUES (%s, %s, %s, 0) RETURNING id
-        """, (email, hash_password(password), username))
+            INSERT INTO users (email, password_hash, username, balance, referred_by, referral_code)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+        """, (email, hash_password(password), username, start_balance, referrer_id, new_ref_code))
         user_id = cur.fetchone()[0]
+
+        # Записываем бонус новому игроку
+        if referrer_id:
+            cur.execute("""
+                INSERT INTO referral_bonuses (referrer_id, referee_id, amount, type)
+                VALUES (%s, %s, 50, 'signup')
+            """, (referrer_id, user_id))
+            # Рефереру начисляем 50₽ за регистрацию друга
+            cur.execute("""
+                UPDATE users SET balance = balance + 50, updated_at = NOW() WHERE id = %s
+            """, (referrer_id,))
 
         session_token = secrets.token_hex(32)
         cur.execute("INSERT INTO sessions (user_id, token) VALUES (%s, %s)", (user_id, session_token))
@@ -84,7 +110,8 @@ def handler(event: dict, context) -> dict:
 
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
             'token': session_token,
-            'user': {'id': user_id, 'email': email, 'username': username, 'balance': 0}
+            'user': {'id': user_id, 'email': email, 'username': username, 'balance': start_balance,
+                     'referral_code': new_ref_code}
         }), 'isBase64Encoded': False}
 
     # ── LOGIN ──
@@ -104,11 +131,15 @@ def handler(event: dict, context) -> dict:
 
         session_token = secrets.token_hex(32)
         cur.execute("INSERT INTO sessions (user_id, token) VALUES (%s, %s)", (user[0], session_token))
+        cur.execute("SELECT referral_code FROM users WHERE id = %s", (user[0],))
+        ref_row = cur.fetchone()
+        ref_code_val = ref_row[0] if ref_row else None
         conn.commit(); cur.close(); conn.close()
 
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
             'token': session_token,
-            'user': {'id': user[0], 'email': user[1], 'username': user[2], 'balance': float(user[3])}
+            'user': {'id': user[0], 'email': user[1], 'username': user[2], 'balance': float(user[3]),
+                     'referral_code': ref_code_val}
         }), 'isBase64Encoded': False}
 
     # ── ME ──
@@ -123,7 +154,8 @@ def handler(event: dict, context) -> dict:
             return {'statusCode': 401, 'headers': HEADERS,
                     'body': json.dumps({'error': 'Сессия истекла, войдите снова'}), 'isBase64Encoded': False}
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
-            'user': {'id': user[0], 'email': user[1], 'username': user[2], 'balance': float(user[3])}
+            'user': {'id': user[0], 'email': user[1], 'username': user[2], 'balance': float(user[3]),
+                     'referral_code': user[4]}
         }), 'isBase64Encoded': False}
 
     # ── BALANCE ──
@@ -176,6 +208,47 @@ def handler(event: dict, context) -> dict:
         return {'statusCode': 200, 'headers': HEADERS,
                 'body': json.dumps({'status': row[0], 'amount': float(row[1]), 'order_number': row[2]}),
                 'isBase64Encoded': False}
+
+    # ── REFERRAL STATS ──
+    if action == 'referral' and http_method == 'GET':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        # Кол-во рефералов и сумма начислений
+        cur.execute("""
+            SELECT COUNT(DISTINCT referee_id), COALESCE(SUM(amount), 0)
+            FROM referral_bonuses WHERE referrer_id = %s
+        """, (user[0],))
+        stats = cur.fetchone()
+
+        # Список рефералов
+        cur.execute("""
+            SELECT u.username, u.email, rb.amount, rb.type, rb.created_at
+            FROM referral_bonuses rb JOIN users u ON rb.referee_id = u.id
+            WHERE rb.referrer_id = %s ORDER BY rb.created_at DESC LIMIT 50
+        """, (user[0],))
+        bonuses = []
+        for row in cur.fetchall():
+            bonuses.append({
+                'username': row[0], 'email': row[1],
+                'amount': float(row[2]), 'type': row[3],
+                'created_at': row[4].isoformat()
+            })
+
+        cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'referral_code': user[4],
+            'total_referrals': int(stats[0]),
+            'total_earned': float(stats[1]),
+            'bonuses': bonuses,
+        }), 'isBase64Encoded': False}
 
     cur.close(); conn.close()
     return {'statusCode': 400, 'headers': HEADERS,
