@@ -2,6 +2,7 @@ import { useState } from 'react';
 import Icon from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
+import SlotsGame from '@/components/SlotsGame';
 
 type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support';
 
@@ -26,9 +27,18 @@ const accentColor = (a: string) =>
 
 export default function Index() {
   const [section, setSection] = useState<Section>('home');
-  const [balance] = useState(14250);
+  const [balance, setBalance] = useState(14250);
+  const [activeGame, setActiveGame] = useState<string | null>(null);
 
   const notify = (msg: string) => toast(msg, { description: 'Эта функция настраивается отдельно — напишите детали.' });
+
+  const openGame = (id: string, name: string) => {
+    if (id === 'slots') {
+      setActiveGame('slots');
+    } else {
+      notify(`Открываю «${name}»`);
+    }
+  };
 
   return (
     <div className="dark min-h-screen bg-background text-foreground overflow-x-hidden">
@@ -57,13 +67,23 @@ export default function Index() {
         </header>
 
         <main className="flex-1 px-5 py-6 pb-28">
-          {section === 'home' && <HomeView balance={balance} setSection={setSection} notify={notify} />}
-          {section === 'games' && <GamesView notify={notify} />}
-          {section === 'deposit' && <DepositView notify={notify} />}
-          {section === 'withdraw' && <WithdrawView balance={balance} notify={notify} />}
-          {section === 'stats' && <StatsView />}
-          {section === 'profile' && <ProfileView setSection={setSection} notify={notify} />}
-          {section === 'support' && <SupportView notify={notify} />}
+          {activeGame === 'slots' ? (
+            <SlotsGame
+              balance={balance}
+              onBalanceChange={(delta) => setBalance((b) => b + delta)}
+              onBack={() => setActiveGame(null)}
+            />
+          ) : (
+            <>
+              {section === 'home' && <HomeView balance={balance} setSection={setSection} openGame={openGame} notify={notify} />}
+              {section === 'games' && <GamesView openGame={openGame} />}
+              {section === 'deposit' && <DepositView notify={notify} />}
+              {section === 'withdraw' && <WithdrawView balance={balance} notify={notify} />}
+              {section === 'stats' && <StatsView />}
+              {section === 'profile' && <ProfileView setSection={setSection} notify={notify} />}
+              {section === 'support' && <SupportView notify={notify} />}
+            </>
+          )}
         </main>
 
         {/* Bottom Nav */}
@@ -73,7 +93,7 @@ export default function Index() {
             return (
               <button
                 key={item.id}
-                onClick={() => setSection(item.id)}
+                onClick={() => { setActiveGame(null); setSection(item.id); }}
                 className="flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl transition-all"
               >
                 <div className={`flex items-center justify-center transition-all ${active ? 'scale-110 text-gold' : 'opacity-50'}`}>
@@ -91,7 +111,7 @@ export default function Index() {
   );
 }
 
-function HomeView({ balance, setSection, notify }: { balance: number; setSection: (s: Section) => void; notify: (m: string) => void }) {
+function HomeView({ balance, setSection, openGame, notify }: { balance: number; setSection: (s: Section) => void; openGame: (id: string, name: string) => void; notify: (m: string) => void }) {
   return (
     <div className="space-y-6">
       <div className="animate-float-up relative rounded-3xl glass glow-soft overflow-hidden p-6">
@@ -137,7 +157,7 @@ function HomeView({ balance, setSection, notify }: { balance: number; setSection
         </div>
         <div className="grid grid-cols-2 gap-3">
           {GAMES.slice(0, 4).map((g, i) => (
-            <GameCard key={g.id} game={g} delay={120 + i * 60} onClick={() => notify(`Открываю «${g.name}»`)} />
+            <GameCard key={g.id} game={g} delay={120 + i * 60} onClick={() => openGame(g.id, g.name)} />
           ))}
         </div>
       </div>
@@ -182,16 +202,16 @@ function GameCard({ game, delay, onClick }: { game: typeof GAMES[number]; delay:
   );
 }
 
-function GamesView({ notify }: { notify: (m: string) => void }) {
+function GamesView({ openGame }: { openGame: (id: string, name: string) => void }) {
   return (
     <div className="space-y-5">
       <SectionTitle title="Игры" subtitle="Выбери, во что сыграть" icon="Gamepad2" />
       <div className="grid grid-cols-2 gap-3">
         {GAMES.map((g, i) => (
-          <GameCard key={g.id} game={g} delay={i * 70} onClick={() => notify(`Открываю «${g.name}»`)} />
+          <GameCard key={g.id} game={g} delay={i * 70} onClick={() => openGame(g.id, g.name)} />
         ))}
         <button
-          onClick={() => notify('Скоро новые игры')}
+          onClick={() => toast('Скоро новые игры')}
           className="animate-float-up glass rounded-2xl p-4 flex flex-col items-center justify-center text-center border-dashed border-gold/20 min-h-[130px]"
           style={{ animationDelay: `${GAMES.length * 70}ms` }}
         >

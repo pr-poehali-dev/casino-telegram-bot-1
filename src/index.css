@@ -212,6 +212,31 @@
     transform: rotateY(1800deg);
   }
 }
+@keyframes win-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes reel-blur {
+  0%,
+  100% {
+    filter: blur(0);
+  }
+  50% {
+    filter: blur(2px);
+  }
+}
+.animate-win-pop {
+  animation: win-pop 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
 .animate-float-up {
   animation: float-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
