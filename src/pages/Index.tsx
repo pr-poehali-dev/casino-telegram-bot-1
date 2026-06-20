@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import SlotsGame from '@/components/SlotsGame';
 import CoinGame from '@/components/CoinGame';
+import DiceGame from '@/components/DiceGame';
 
 type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support';
 
@@ -34,7 +35,7 @@ export default function Index() {
   const notify = (msg: string) => toast(msg, { description: 'Эта функция настраивается отдельно — напишите детали.' });
 
   const openGame = (id: string, name: string) => {
-    if (id === 'slots' || id === 'coin') {
+    if (id === 'slots' || id === 'coin' || id === 'dice') {
       setActiveGame(id);
     } else {
       notify(`Открываю «${name}»`);
@@ -76,6 +77,12 @@ export default function Index() {
             />
           ) : activeGame === 'coin' ? (
             <CoinGame
+              balance={balance}
+              onBalanceChange={(delta) => setBalance((b) => b + delta)}
+              onBack={() => setActiveGame(null)}
+            />
+          ) : activeGame === 'dice' ? (
+            <DiceGame
               balance={balance}
               onBalanceChange={(delta) => setBalance((b) => b + delta)}
               onBack={() => setActiveGame(null)}

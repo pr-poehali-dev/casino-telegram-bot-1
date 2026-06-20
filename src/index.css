@@ -212,6 +212,41 @@
     transform: rotateY(1800deg);
   }
 }
+@keyframes dice-roll-0 {
+  0% {
+    transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg);
+  }
+  25% {
+    transform: rotateX(180deg) rotateY(90deg) rotateZ(45deg) translateY(-12px);
+  }
+  50% {
+    transform: rotateX(360deg) rotateY(180deg) rotateZ(90deg);
+  }
+  75% {
+    transform: rotateX(540deg) rotateY(270deg) rotateZ(135deg) translateY(-8px);
+  }
+  100% {
+    transform: rotateX(720deg) rotateY(360deg) rotateZ(180deg);
+  }
+}
+@keyframes dice-roll-1 {
+  0% {
+    transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg);
+  }
+  25% {
+    transform: rotateX(-90deg) rotateY(180deg) rotateZ(-60deg) translateY(-14px);
+  }
+  50% {
+    transform: rotateX(-180deg) rotateY(360deg) rotateZ(-120deg);
+  }
+  75% {
+    transform: rotateX(-270deg) rotateY(540deg) rotateZ(-180deg)
+      translateY(-10px);
+  }
+  100% {
+    transform: rotateX(-360deg) rotateY(720deg) rotateZ(-240deg);
+  }
+}
 @keyframes coin-flip-3d {
   0% {
     transform: rotateY(0deg) translateY(0px);
