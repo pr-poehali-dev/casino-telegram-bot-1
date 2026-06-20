@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { useRobokassa, openPaymentPage } from '@/components/extensions/robokassa/useRobokassa';
 import Icon from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
@@ -1989,6 +1990,8 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [stats, setStats] = useState<Record<string, number> | null>(null);
+  const [chartData, setChartData] = useState<{ date: string; deposits: number; withdrawals: number }[]>([]);
+  const [chartDays, setChartDays] = useState(14);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState('');
   const [updating, setUpdating] = useState<number | null>(null);
@@ -2003,6 +2006,14 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       onPendingChange?.(data.wd_pending_count || 0);
     }
   }, [onPendingChange]);
+
+  const fetchChart = useCallback(async (pwd: string, days: number) => {
+    const res = await fetch(`${ADMIN_API}?type=chart&days=${days}`, { headers: { 'X-Admin-Password': pwd } });
+    if (res.ok) {
+      const data = await res.json();
+      setChartData(data.chart || []);
+    }
+  }, []);
 
   const fetchData = useCallback(async (pwd: string, type: 'withdrawals' | 'orders', statusFilter = '') => {
     setLoading(true);
@@ -2031,6 +2042,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       setAuthed(true);
       fetchData(password, 'orders');
       fetchStats(password);
+      fetchChart(password, 14);
     } finally {
       setLoading(false);
     }
@@ -2279,6 +2291,55 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
           </div>
         </div>
       )}
+
+      {/* График */}
+      <div className="glass rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider">График пополнений</p>
+          <div className="flex gap-1">
+            {[7, 14, 30].map(d => (
+              <button key={d} onClick={() => { setChartDays(d); fetchChart(passwordRef.current, d); }}
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all
+                  ${chartDays === d ? 'gold-gradient text-background' : 'glass text-muted-foreground'}`}>
+                {d}д
+              </button>
+            ))}
+          </div>
+        </div>
+        {chartData.length === 0 ? (
+          <div className="h-32 flex items-center justify-center text-muted-foreground text-sm">
+            Нет данных за этот период
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={160}>
+            <AreaChart data={chartData} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
+              <defs>
+                <linearGradient id="gDeposit" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#f5c842" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#f5c842" stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="gWithdraw" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#f87171" stopOpacity={0.25} />
+                  <stop offset="95%" stopColor="#f87171" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+              <XAxis dataKey="date" tick={{ fill: '#888', fontSize: 10 }} tickLine={false} axisLine={false} />
+              <YAxis tick={{ fill: '#888', fontSize: 10 }} tickLine={false} axisLine={false} />
+              <Tooltip
+                contentStyle={{ background: '#1a1a2e', border: '1px solid rgba(245,200,66,0.2)', borderRadius: 12, fontSize: 12 }}
+                formatter={(val: number, name: string) => [`${Number(val).toLocaleString('ru')} ₽`, name === 'deposits' ? 'Пополнения' : 'Выводы']}
+              />
+              <Area type="monotone" dataKey="deposits" stroke="#f5c842" strokeWidth={2} fill="url(#gDeposit)" dot={false} />
+              <Area type="monotone" dataKey="withdrawals" stroke="#f87171" strokeWidth={2} fill="url(#gWithdraw)" dot={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
+        <div className="flex gap-4 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 bg-gold inline-block rounded" /> Пополнения</span>
+          <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 bg-red-400 inline-block rounded" /> Выводы</span>
+        </div>
+      </div>
 
       {/* Вкладки */}
       <div className="grid grid-cols-2 gap-2">

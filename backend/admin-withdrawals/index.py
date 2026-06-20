@@ -56,6 +56,49 @@ def handler(event: dict, context) -> dict:
         status_filter = params.get('status', '')
         data_type = params.get('type', 'withdrawals')
 
+        # График пополнений по дням
+        if data_type == 'chart':
+            days = int(params.get('days', '30'))
+            cur.execute("""
+                SELECT
+                    DATE(created_at) AS day,
+                    COUNT(*) FILTER (WHERE status = 'paid') AS deposits_count,
+                    COALESCE(SUM(amount) FILTER (WHERE status = 'paid'), 0) AS deposits_sum
+                FROM orders
+                WHERE created_at >= CURRENT_DATE - INTERVAL '%s days'
+                GROUP BY DATE(created_at)
+                ORDER BY day ASC
+            """ % days)
+            rows = cur.fetchall()
+            cur.execute("""
+                SELECT
+                    DATE(created_at) AS day,
+                    COUNT(*) AS wd_count,
+                    COALESCE(SUM(amount), 0) AS wd_sum
+                FROM withdrawals
+                WHERE created_at >= CURRENT_DATE - INTERVAL '%s days'
+                GROUP BY DATE(created_at)
+                ORDER BY day ASC
+            """ % days)
+            wd_rows = cur.fetchall()
+            cur.close(); conn.close()
+
+            # Объединяем по дате
+            chart_map = {}
+            for row in rows:
+                d = row[0].strftime('%d.%m')
+                chart_map[d] = {'date': d, 'deposits': float(row[2]), 'deposits_count': int(row[1]), 'withdrawals': 0.0, 'wd_count': 0}
+            for row in wd_rows:
+                d = row[0].strftime('%d.%m')
+                if d not in chart_map:
+                    chart_map[d] = {'date': d, 'deposits': 0.0, 'deposits_count': 0, 'withdrawals': 0.0, 'wd_count': 0}
+                chart_map[d]['withdrawals'] = float(row[2])
+                chart_map[d]['wd_count'] = int(row[1])
+
+            chart = sorted(chart_map.values(), key=lambda x: x['date'])
+            return {'statusCode': 200, 'headers': HEADERS,
+                    'body': json.dumps({'chart': chart}), 'isBase64Encoded': False}
+
         # Сводная статистика
         if data_type == 'stats':
             cur.execute("""
