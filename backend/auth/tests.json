@@ -1,0 +1,37 @@
+{
+  "tests": [
+    {
+      "name": "Register missing fields returns 400",
+      "method": "POST",
+      "path": "/?action=register",
+      "body": {},
+      "expectedStatus": 400,
+      "expectedBody": {"error": "Email и пароль обязательны"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Login wrong credentials returns 401",
+      "method": "POST",
+      "path": "/?action=login",
+      "body": {"email": "wrong@test.com", "password": "wrongpass"},
+      "expectedStatus": 401,
+      "expectedBody": {"error": "Неверный email или пароль"},
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Me without token returns 401",
+      "method": "GET",
+      "path": "/?action=me",
+      "expectedStatus": 401,
+      "bodyMatcher": "partial"
+    },
+    {
+      "name": "Order status without session_id returns 400",
+      "method": "GET",
+      "path": "/?action=order-status",
+      "expectedStatus": 400,
+      "expectedBody": {"error": "session_id required"},
+      "bodyMatcher": "partial"
+    }
+  ]
+}

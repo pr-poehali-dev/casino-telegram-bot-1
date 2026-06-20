@@ -30,11 +30,65 @@ const NAV = [
 const accentColor = (a: string) =>
   a === 'crimson' ? 'hsl(var(--crimson))' : a === 'emerald' ? 'hsl(var(--emerald))' : 'hsl(var(--gold))';
 
+const AUTH_API = 'https://functions.poehali.dev/e956557c-ce79-4797-8cec-5934cb2924d8';
+const AUTH_TOKEN_KEY = 'casino_auth_token';
+
+interface AuthUser { id: number; email: string; username: string; balance: number; }
+
 export default function Index() {
   const [section, setSection] = useState<Section>('home');
-  const [balance, setBalance] = useState(14250);
+  const [balance, setBalance] = useState(0);
   const [activeGame, setActiveGame] = useState<string | null>(null);
   const [pendingWithdrawals, setPendingWithdrawals] = useState(0);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  // При старте — восстанавливаем сессию из localStorage
+  useEffect(() => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!token) { setAuthLoading(false); return; }
+    fetch(`${AUTH_API}?action=me`, { headers: { 'X-Auth-Token': token } })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.user) { setUser(data.user); setBalance(data.user.balance); }
+        else localStorage.removeItem(AUTH_TOKEN_KEY);
+      })
+      .catch(() => localStorage.removeItem(AUTH_TOKEN_KEY))
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  const handleAuthSuccess = (token: string, u: AuthUser) => {
+    localStorage.setItem(AUTH_TOKEN_KEY, token);
+    setUser(u);
+    setBalance(u.balance);
+  };
+
+  const handleLogout = async () => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (token) {
+      await fetch(`${AUTH_API}?action=logout`, { method: 'POST', headers: { 'X-Auth-Token': token } });
+    }
+    localStorage.removeItem(AUTH_TOKEN_KEY);
+    setUser(null);
+    setBalance(0);
+    setSection('home');
+  };
+
+  // Синхронизируем баланс с БД при изменении
+  const syncBalance = useCallback(async (delta: number) => {
+    setBalance(b => b + delta);
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!token) return;
+    const res = await fetch(`${AUTH_API}?action=balance`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+      body: JSON.stringify({ delta }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setBalance(data.balance);
+    }
+  }, []);
 
   const notify = (msg: string) => toast(msg, { description: 'Эта функция настраивается отдельно — напишите детали.' });
 
@@ -45,6 +99,25 @@ export default function Index() {
       notify(`Открываю «${name}»`);
     }
   };
+
+  // Экран загрузки
+  if (authLoading) {
+    return (
+      <div className="dark min-h-screen bg-background flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-16 h-16 rounded-2xl gold-gradient flex items-center justify-center glow-gold animate-pulse">
+            <Icon name="Diamond" size={28} className="text-background" />
+          </div>
+          <Icon name="Loader" size={24} className="animate-spin text-gold" />
+        </div>
+      </div>
+    );
+  }
+
+  // Экран входа/регистрации
+  if (!user) {
+    return <AuthScreen onSuccess={handleAuthSuccess} />;
+  }
 
   return (
     <div className="dark min-h-screen bg-background text-foreground overflow-x-hidden">
@@ -107,10 +180,10 @@ export default function Index() {
             <>
               {section === 'home' && <HomeView balance={balance} setSection={setSection} openGame={openGame} notify={notify} />}
               {section === 'games' && <GamesView openGame={openGame} />}
-              {section === 'deposit' && <DepositView notify={notify} onBalanceChange={(delta) => setBalance((b) => b + delta)} />}
+              {section === 'deposit' && <DepositView notify={notify} onBalanceChange={syncBalance} />}
               {section === 'withdraw' && <WithdrawView balance={balance} notify={notify} />}
               {section === 'stats' && <StatsView />}
-              {section === 'profile' && <ProfileView setSection={setSection} notify={notify} />}
+              {section === 'profile' && <ProfileView setSection={setSection} notify={notify} user={user} onLogout={handleLogout} />}
               {section === 'support' && <SupportView notify={notify} />}
               {section === 'admin' && <AdminView onPendingChange={setPendingWithdrawals} />}
             </>
@@ -298,7 +371,7 @@ const DEPOSIT_METHODS = [
 ];
 
 const ROBOKASSA_API = 'https://functions.poehali.dev/ed14271a-993b-4abb-a021-fd5ba53c863d';
-const ORDER_STATUS_API = 'https://functions.poehali.dev/c33b0e83-4616-4a6e-a9fd-18de4f0b2b09';
+const ORDER_STATUS_API = 'https://functions.poehali.dev/e956557c-ce79-4797-8cec-5934cb2924d8';
 
 type DepositStep = 'method' | 'amount' | 'user-info' | 'crypto-form' | 'redirecting' | 'waiting' | 'success';
 
@@ -329,7 +402,7 @@ function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string)
     let attempts = 0;
     const poll = async () => {
       try {
-        const res = await fetch(`${ORDER_STATUS_API}?session_id=${sid}`);
+        const res = await fetch(`${ORDER_STATUS_API}?action=order-status&session_id=${sid}`);
         if (res.ok) {
           const data = await res.json();
           if (data.status === 'paid') {
@@ -1126,7 +1199,7 @@ function StatsView() {
   );
 }
 
-function ProfileView({ setSection, notify }: { setSection: (s: Section) => void; notify: (m: string) => void }) {
+function ProfileView({ setSection, notify, user, onLogout }: { setSection: (s: Section) => void; notify: (m: string) => void; user: AuthUser | null; onLogout: () => void }) {
   const [tapCount, setTapCount] = useState(0);
   const tapTimer = useRef<number | null>(null);
 
@@ -1142,12 +1215,13 @@ function ProfileView({ setSection, notify }: { setSection: (s: Section) => void;
     tapTimer.current = window.setTimeout(() => setTapCount(0), 1500);
   };
 
-  const items = [
+  const items: { name: string; icon: string; action: () => void; danger?: boolean }[] = [
     { name: 'Пополнить баланс', icon: 'Wallet', action: () => setSection('deposit') },
     { name: 'Вывод средств', icon: 'ArrowUpFromLine', action: () => setSection('withdraw') },
     { name: 'Статистика', icon: 'TrendingUp', action: () => setSection('stats') },
     { name: 'Поддержка', icon: 'Headphones', action: () => setSection('support') },
     { name: 'Настройки', icon: 'Settings', action: () => notify('Открываю настройки') },
+    { name: 'Выйти из аккаунта', icon: 'LogOut', action: onLogout, danger: true },
   ];
   return (
     <div className="space-y-5">
@@ -1158,7 +1232,8 @@ function ProfileView({ setSection, notify }: { setSection: (s: Section) => void;
             onClick={handleSecretTap}>
             <Icon name="User" size={36} className="text-background" />
           </div>
-          <h2 className="font-display text-xl font-bold">Александр</h2>
+          <h2 className="font-display text-xl font-bold">{user?.username || 'Игрок'}</h2>
+          <p className="text-xs text-muted-foreground mt-0.5">{user?.email}</p>
           <span className="inline-flex items-center gap-1 mt-1 text-xs text-gold bg-gold/10 px-3 py-1 rounded-full">
             <Icon name="Crown" size={12} /> VIP статус
           </span>
@@ -1172,10 +1247,10 @@ function ProfileView({ setSection, notify }: { setSection: (s: Section) => void;
             className="animate-float-up w-full glass rounded-2xl p-4 flex items-center gap-3 hover-lift"
             style={{ animationDelay: `${i * 50}ms` }}
           >
-            <div className="w-10 h-10 rounded-xl bg-gold/10 flex items-center justify-center text-gold">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${it.danger ? 'bg-red-500/10 text-red-400' : 'bg-gold/10 text-gold'}`}>
               <Icon name={it.icon} size={20} />
             </div>
-            <span className="font-medium flex-1 text-left">{it.name}</span>
+            <span className={`font-medium flex-1 text-left ${it.danger ? 'text-red-400' : ''}`}>{it.name}</span>
             <Icon name="ChevronRight" size={18} className="text-muted-foreground" />
           </button>
         ))}
@@ -1208,6 +1283,108 @@ function SupportView({ notify }: { notify: (m: string) => void }) {
             <Icon name="ChevronRight" size={18} className="text-muted-foreground" />
           </button>
         ))}
+      </div>
+    </div>
+  );
+}
+
+function AuthScreen({ onSuccess }: { onSuccess: (token: string, user: AuthUser) => void }) {
+  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [username, setUsername] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const inputCls = 'w-full bg-white/5 border border-gold/20 rounded-xl px-4 py-3 outline-none focus:border-gold/60 transition-colors text-foreground placeholder:text-muted-foreground/50';
+
+  const handleSubmit = async () => {
+    setError('');
+    if (!email || !password) { setError('Заполни все поля'); return; }
+    setLoading(true);
+    try {
+      const action = mode === 'login' ? 'login' : 'register';
+      const body: Record<string, string> = { email, password };
+      if (mode === 'register' && username) body.username = username;
+      const res = await fetch(`${AUTH_API}?action=${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) { setError(data.error || 'Ошибка'); return; }
+      onSuccess(data.token, data.user);
+    } catch {
+      setError('Ошибка сети, попробуй снова');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="dark min-h-screen bg-background text-foreground flex flex-col items-center justify-center px-5">
+      <div className="w-full max-w-sm space-y-6">
+        {/* Лого */}
+        <div className="flex flex-col items-center gap-3 mb-2">
+          <div className="w-20 h-20 rounded-3xl gold-gradient flex items-center justify-center glow-gold">
+            <Icon name="Diamond" size={36} className="text-background" />
+          </div>
+          <div className="text-center">
+            <h1 className="font-display text-4xl font-bold gold-text tracking-wide">LUXE</h1>
+            <p className="text-xs text-muted-foreground tracking-[0.3em] uppercase mt-1">Casino</p>
+          </div>
+        </div>
+
+        {/* Переключатель */}
+        <div className="grid grid-cols-2 gap-1 glass rounded-2xl p-1">
+          {(['login', 'register'] as const).map(m => (
+            <button key={m} onClick={() => { setMode(m); setError(''); }}
+              className={`py-2.5 rounded-xl text-sm font-semibold transition-all
+                ${mode === m ? 'gold-gradient text-background' : 'text-muted-foreground'}`}>
+              {m === 'login' ? 'Войти' : 'Регистрация'}
+            </button>
+          ))}
+        </div>
+
+        {/* Форма */}
+        <div className="glass rounded-3xl p-6 space-y-4">
+          {mode === 'register' && (
+            <div>
+              <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Имя игрока</label>
+              <input className={inputCls} placeholder="Например: Lucky777" value={username}
+                onChange={e => setUsername(e.target.value)} />
+            </div>
+          )}
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Email</label>
+            <input className={inputCls} type="email" inputMode="email" placeholder="your@email.com"
+              value={email} onChange={e => setEmail(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Пароль</label>
+            <input className={inputCls} type="password" placeholder={mode === 'register' ? 'Минимум 6 символов' : '••••••••'}
+              value={password} onChange={e => setPassword(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()} />
+          </div>
+
+          {error && (
+            <div className="flex items-center gap-2 text-sm text-red-400">
+              <Icon name="AlertCircle" size={14} /> {error}
+            </div>
+          )}
+
+          <Button onClick={handleSubmit} disabled={loading}
+            className="w-full gold-gradient text-background font-bold h-12 glow-gold text-base disabled:opacity-50">
+            {loading
+              ? <><Icon name="Loader" size={18} className="mr-2 animate-spin" /> {mode === 'login' ? 'Входим...' : 'Регистрируем...'}</>
+              : mode === 'login' ? 'Войти в аккаунт' : 'Создать аккаунт'
+            }
+          </Button>
+        </div>
+
+        <p className="text-center text-xs text-muted-foreground/60">
+          Продолжая, вы соглашаетесь с правилами казино. 18+
+        </p>
       </div>
     </div>
   );
