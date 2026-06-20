@@ -751,11 +751,17 @@ const WITHDRAW_METHODS = [
 
 type WithdrawStep = 'method' | 'form' | 'confirm' | 'success';
 
+const WITHDRAW_API = 'https://functions.poehali.dev/5264284f-4bd1-4c29-9530-a9fd03734d4d';
+
 function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (m: string) => void }) {
   const [step, setStep] = useState<WithdrawStep>('method');
   const [method, setMethod] = useState<typeof WITHDRAW_METHODS[0] | null>(null);
   const [amount, setAmount] = useState('');
   const [destination, setDestination] = useState('');
+  const [userName, setUserName] = useState('');
+  const [userEmail, setUserEmail] = useState('');
+  const [userTelegram, setUserTelegram] = useState('');
+  const [requestNumber, setRequestNumber] = useState('');
   const [loading, setLoading] = useState(false);
 
   const parsedAmount = parseInt(amount) || 0;
@@ -763,11 +769,37 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
 
   const reset = () => {
     setStep('method'); setMethod(null); setAmount(''); setDestination('');
+    setUserName(''); setUserEmail(''); setUserTelegram('');
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    if (!method) return;
     setLoading(true);
-    setTimeout(() => { setLoading(false); setStep('success'); }, 2000);
+    try {
+      const res = await fetch(WITHDRAW_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          method: method.name,
+          destination,
+          amount: parsedAmount,
+          user_name: userName,
+          user_email: userEmail,
+          user_telegram: userTelegram,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setRequestNumber(data.request_number);
+        setStep('success');
+      } else {
+        toast.error(data.error || 'Ошибка отправки заявки');
+      }
+    } catch {
+      toast.error('Ошибка сети, попробуй ещё раз');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const destPlaceholder = method?.id === 'card' ? '0000 0000 0000 0000'
@@ -797,13 +829,19 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
             </p>
           </div>
           <div className="w-full glass rounded-2xl p-4 space-y-2 text-sm">
+            {requestNumber && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Заявка</span>
+                <span className="font-mono text-xs">{requestNumber}</span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-muted-foreground">Метод</span>
               <span className="font-medium">{method?.name}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Реквизиты</span>
-              <span className="font-medium font-mono text-xs">{destination.slice(0, 6)}••••{destination.slice(-4)}</span>
+              <span className="font-medium font-mono text-xs">{destination.slice(0, 4)}••••{destination.slice(-4)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Сумма</span>
@@ -921,6 +959,32 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
             <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">{destLabel}</label>
             <input className={inputCls} placeholder={destPlaceholder}
               value={destination} onChange={e => setDestination(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Имя (необязательно)</label>
+            <input className={inputCls} placeholder="Иван Иванов" value={userName}
+              onChange={e => setUserName(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Email (необязательно)</label>
+            <input className={inputCls} placeholder="your@email.com" value={userEmail}
+              onChange={e => setUserEmail(e.target.value)} type="email" inputMode="email" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Telegram (необязательно)</label>
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/60 text-sm">@</span>
+              <input className={inputCls + ' pl-8'} placeholder="username"
+                value={userTelegram} onChange={e => setUserTelegram(e.target.value.replace('@', ''))} />
+            </div>
+            <div className="mt-2 glass rounded-xl p-3 flex items-center gap-3">
+              <Icon name="MessageCircle" size={16} className="text-[#29a0d8] shrink-0" />
+              <p className="text-xs text-muted-foreground flex-1">Получишь статус заявки в Telegram — сначала нажми <span className="text-foreground font-medium">Старт</span></p>
+              <a href="https://t.me/Luxxeecassinnobot" target="_blank" rel="noopener noreferrer"
+                className="shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg bg-[#29a0d8]/20 text-[#29a0d8] hover:bg-[#29a0d8]/30 transition-colors flex items-center gap-1">
+                <Icon name="Send" size={12} /> Открыть бота
+              </a>
+            </div>
           </div>
 
           {parsedAmount > balance && (
