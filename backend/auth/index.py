@@ -2,6 +2,7 @@ import json
 import os
 import hashlib
 import secrets
+import random
 import psycopg2
 
 HEADERS = {
@@ -248,6 +249,89 @@ def handler(event: dict, context) -> dict:
             'total_referrals': int(stats[0]),
             'total_earned': float(stats[1]),
             'bonuses': bonuses,
+        }), 'isBase64Encoded': False}
+
+    # ── DAILY BONUS ──
+    if action == 'daily' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        # Проверяем, брал ли сегодня
+        cur.execute("""
+            SELECT last_daily_bonus, daily_streak FROM users WHERE id = %s
+        """, (user[0],))
+        row = cur.fetchone()
+        last_bonus = row[0]
+        streak = row[1] or 0
+
+        cur.execute("SELECT CURRENT_DATE")
+        today = cur.fetchone()[0]
+
+        if last_bonus and last_bonus >= today:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'already_claimed', 'message': 'Бонус уже получен сегодня'}),
+                    'isBase64Encoded': False}
+
+        # Сбрасываем серию если пропустил день
+        import datetime
+        if last_bonus and (today - last_bonus).days > 1:
+            streak = 0
+        streak += 1
+
+        # Реальная сумма: 1–10 ₽ (показываем "до 100 ₽")
+        bonus_amount = round(random.uniform(1, 10), 2)
+
+        cur.execute("""
+            UPDATE users
+            SET balance = balance + %s,
+                last_daily_bonus = %s,
+                daily_streak = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            RETURNING balance
+        """, (bonus_amount, today, streak, user[0]))
+        new_balance = float(cur.fetchone()[0])
+        conn.commit(); cur.close(); conn.close()
+
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'bonus': bonus_amount,
+            'balance': new_balance,
+            'streak': streak,
+        }), 'isBase64Encoded': False}
+
+    # ── DAILY STATUS (можно ли получить) ──
+    if action == 'daily-status' and http_method == 'GET':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        cur.execute("SELECT last_daily_bonus, daily_streak, CURRENT_DATE FROM users WHERE id = %s", (user[0],))
+        row = cur.fetchone()
+        cur.close(); conn.close()
+
+        last_bonus = row[0]
+        streak = row[1] or 0
+        today = row[2]
+        can_claim = not last_bonus or last_bonus < today
+
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'can_claim': can_claim,
+            'streak': streak,
+            'last_bonus': last_bonus.isoformat() if last_bonus else None,
         }), 'isBase64Encoded': False}
 
     cur.close(); conn.close()

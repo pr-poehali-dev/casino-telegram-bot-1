@@ -9,7 +9,7 @@ import DiceGame from '@/components/DiceGame';
 import RouletteGame from '@/components/RouletteGame';
 import BlackjackGame from '@/components/BlackjackGame';
 
-type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral';
+type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily';
 
 const GAMES = [
   { id: 'roulette', name: 'Рулетка', icon: 'CircleDot', desc: 'Красное или чёрное', accent: 'crimson', emoji: '🎡' },
@@ -42,6 +42,7 @@ export default function Index() {
   const [pendingWithdrawals, setPendingWithdrawals] = useState(0);
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [canClaimBonus, setCanClaimBonus] = useState(false);
 
   // При старте — восстанавливаем сессию из localStorage
   useEffect(() => {
@@ -50,17 +51,25 @@ export default function Index() {
     fetch(`${AUTH_API}?action=me`, { headers: { 'X-Auth-Token': token } })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
-        if (data?.user) { setUser(data.user); setBalance(data.user.balance); }
+        if (data?.user) { setUser(data.user); setBalance(data.user.balance); checkDailyBonus(token); }
         else localStorage.removeItem(AUTH_TOKEN_KEY);
       })
       .catch(() => localStorage.removeItem(AUTH_TOKEN_KEY))
       .finally(() => setAuthLoading(false));
   }, []);
 
+  const checkDailyBonus = useCallback((token: string) => {
+    fetch(`${AUTH_API}?action=daily-status`, { headers: { 'X-Auth-Token': token } })
+      .then(r => r.json())
+      .then(d => setCanClaimBonus(d.can_claim || false))
+      .catch(() => {});
+  }, []);
+
   const handleAuthSuccess = (token: string, u: AuthUser) => {
     localStorage.setItem(AUTH_TOKEN_KEY, token);
     setUser(u);
     setBalance(u.balance);
+    checkDailyBonus(token);
   };
 
   const handleLogout = async () => {
@@ -178,7 +187,7 @@ export default function Index() {
             />
           ) : (
             <>
-              {section === 'home' && <HomeView balance={balance} setSection={setSection} openGame={openGame} notify={notify} />}
+              {section === 'home' && <HomeView balance={balance} setSection={setSection} openGame={openGame} notify={notify} canClaimBonus={canClaimBonus} />}
               {section === 'games' && <GamesView openGame={openGame} />}
               {section === 'deposit' && <DepositView notify={notify} onBalanceChange={syncBalance} />}
               {section === 'withdraw' && <WithdrawView balance={balance} notify={notify} />}
@@ -187,6 +196,7 @@ export default function Index() {
               {section === 'support' && <SupportView notify={notify} />}
               {section === 'admin' && <AdminView onPendingChange={setPendingWithdrawals} />}
               {section === 'referral' && <ReferralView user={user} onBack={() => setSection('profile')} />}
+              {section === 'daily' && <DailyBonusView onBack={() => setSection('home')} onClaimed={(bonus, balance) => { syncBalance(0); setBalance(balance); setSection('home'); }} />}
             </>
           )}
         </main>
@@ -222,7 +232,7 @@ export default function Index() {
   );
 }
 
-function HomeView({ balance, setSection, openGame, notify }: { balance: number; setSection: (s: Section) => void; openGame: (id: string, name: string) => void; notify: (m: string) => void }) {
+function HomeView({ balance, setSection, openGame, notify, canClaimBonus }: { balance: number; setSection: (s: Section) => void; openGame: (id: string, name: string) => void; notify: (m: string) => void; canClaimBonus?: boolean }) {
   return (
     <div className="space-y-6">
       <div className="animate-float-up relative rounded-3xl glass glow-soft overflow-hidden p-6">
@@ -242,6 +252,21 @@ function HomeView({ balance, setSection, openGame, notify }: { balance: number; 
               <Icon name="ArrowUpFromLine" size={18} className="mr-1" /> Вывести
             </Button>
           </div>
+
+          {/* Ежедневный бонус */}
+          {canClaimBonus && (
+            <button onClick={() => setSection('daily')}
+              className="mt-3 w-full flex items-center gap-3 rounded-2xl px-4 py-3 border border-gold/40 bg-gold/5 hover:bg-gold/10 transition-all animate-pulse-slow">
+              <div className="w-9 h-9 rounded-xl gold-gradient flex items-center justify-center shrink-0 glow-gold">
+                <Icon name="Gift" size={18} className="text-background" />
+              </div>
+              <div className="text-left flex-1">
+                <div className="text-sm font-bold gold-text">Ежедневный бонус доступен!</div>
+                <div className="text-xs text-muted-foreground">Нажми и получи до 100 ₽</div>
+              </div>
+              <Icon name="ChevronRight" size={18} className="text-gold" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -1403,6 +1428,124 @@ function AuthScreen({ onSuccess }: { onSuccess: (token: string, user: AuthUser) 
         <p className="text-center text-xs text-muted-foreground/60">
           Продолжая, вы соглашаетесь с правилами казино. 18+
         </p>
+      </div>
+    </div>
+  );
+}
+
+function DailyBonusView({ onBack, onClaimed }: { onBack: () => void; onClaimed: (bonus: number, balance: number) => void }) {
+  const [step, setStep] = useState<'idle' | 'spinning' | 'result'>('idle');
+  const [bonus, setBonus] = useState(0);
+  const [newBalance, setNewBalance] = useState(0);
+  const [error, setError] = useState('');
+  const [displayNum, setDisplayNum] = useState(0);
+
+  const handleClaim = async () => {
+    const token = localStorage.getItem('casino_auth_token');
+    if (!token) return;
+    setStep('spinning');
+    setError('');
+
+    // Анимация счётчика до 100
+    let frame = 0;
+    const spin = setInterval(() => {
+      setDisplayNum(Math.floor(Math.random() * 100) + 1);
+      frame++;
+      if (frame > 20) clearInterval(spin);
+    }, 60);
+
+    try {
+      const res = await fetch(`${AUTH_API}?action=daily`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+
+      setTimeout(() => {
+        clearInterval(spin);
+        if (res.ok) {
+          setBonus(data.bonus);
+          setNewBalance(data.balance);
+          setDisplayNum(data.bonus);
+          setStep('result');
+        } else {
+          setError(data.message || 'Ошибка');
+          setStep('idle');
+        }
+      }, 1400);
+    } catch {
+      clearInterval(spin);
+      setError('Ошибка сети');
+      setStep('idle');
+    }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
+          <Icon name="ArrowLeft" size={20} />
+        </button>
+        <div>
+          <h2 className="font-display text-xl font-bold">Ежедневный бонус</h2>
+          <p className="text-sm text-muted-foreground">Заходи каждый день за наградой</p>
+        </div>
+      </div>
+
+      <div className="glass rounded-3xl p-8 flex flex-col items-center gap-6 text-center glow-soft">
+        {step === 'result' ? (
+          <>
+            <div className="w-24 h-24 rounded-full gold-gradient flex items-center justify-center glow-gold animate-win-pop">
+              <Icon name="Gift" size={40} className="text-background" />
+            </div>
+            <div>
+              <p className="text-muted-foreground text-sm mb-1">Ты получил</p>
+              <div className="font-display text-5xl font-bold gold-text">+{bonus.toFixed(2)} ₽</div>
+              <p className="text-xs text-muted-foreground mt-2">Баланс: {newBalance.toLocaleString('ru')} ₽</p>
+            </div>
+            <Button onClick={() => onClaimed(bonus, newBalance)}
+              className="w-full gold-gradient text-background font-bold h-12 glow-gold">
+              <Icon name="Check" size={18} className="mr-2" /> Отлично!
+            </Button>
+          </>
+        ) : (
+          <>
+            <div className={`w-24 h-24 rounded-full gold-gradient flex items-center justify-center glow-gold ${step === 'spinning' ? 'animate-spin' : ''}`}>
+              <Icon name="Gift" size={40} className="text-background" />
+            </div>
+
+            {step === 'spinning' ? (
+              <div className="font-display text-6xl font-bold gold-text tabular-nums">
+                {displayNum} ₽
+              </div>
+            ) : (
+              <div>
+                <p className="text-muted-foreground text-sm">Нажми и получи</p>
+                <div className="font-display text-5xl font-bold gold-text mt-1">до 100 ₽</div>
+                <p className="text-xs text-muted-foreground mt-2">Бонус доступен раз в сутки</p>
+              </div>
+            )}
+
+            {error && (
+              <div className="flex items-center gap-2 text-sm text-red-400">
+                <Icon name="AlertCircle" size={14} /> {error}
+              </div>
+            )}
+
+            <Button onClick={handleClaim} disabled={step === 'spinning'}
+              className="w-full gold-gradient text-background font-bold h-14 text-lg glow-gold disabled:opacity-60">
+              {step === 'spinning'
+                ? <><Icon name="Loader" size={20} className="mr-2 animate-spin" /> Крутим барабан...</>
+                : <><Icon name="Gift" size={20} className="mr-2" /> Получить бонус</>}
+            </Button>
+          </>
+        )}
+      </div>
+
+      <div className="glass rounded-2xl p-4 flex items-center gap-3 text-sm text-muted-foreground">
+        <Icon name="Info" size={16} className="text-gold shrink-0" />
+        Бонус начисляется случайно. Заходи каждый день — не пропускай!
       </div>
     </div>
   );
