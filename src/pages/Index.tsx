@@ -34,6 +34,7 @@ export default function Index() {
   const [section, setSection] = useState<Section>('home');
   const [balance, setBalance] = useState(14250);
   const [activeGame, setActiveGame] = useState<string | null>(null);
+  const [pendingWithdrawals, setPendingWithdrawals] = useState(0);
 
   const notify = (msg: string) => toast(msg, { description: 'Эта функция настраивается отдельно — напишите детали.' });
 
@@ -111,7 +112,7 @@ export default function Index() {
               {section === 'stats' && <StatsView />}
               {section === 'profile' && <ProfileView setSection={setSection} notify={notify} />}
               {section === 'support' && <SupportView notify={notify} />}
-              {section === 'admin' && <AdminView />}
+              {section === 'admin' && <AdminView onPendingChange={setPendingWithdrawals} />}
             </>
           )}
         </main>
@@ -120,14 +121,20 @@ export default function Index() {
         <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md z-30 glass border-t border-gold/10 px-3 py-2 flex justify-around">
           {NAV.map((item) => {
             const active = section === item.id;
+            const showBadge = item.id === 'profile' && pendingWithdrawals > 0;
             return (
               <button
                 key={item.id}
                 onClick={() => { setActiveGame(null); setSection(item.id); }}
                 className="flex flex-col items-center gap-1 px-3 py-1.5 rounded-xl transition-all"
               >
-                <div className={`flex items-center justify-center transition-all ${active ? 'scale-110 text-gold' : 'opacity-50'}`}>
+                <div className={`relative flex items-center justify-center transition-all ${active ? 'scale-110 text-gold' : 'opacity-50'}`}>
                   <Icon name={item.icon} size={22} />
+                  {showBadge && (
+                    <span className="absolute -top-1.5 -right-2 min-w-[16px] h-4 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center px-1 leading-none">
+                      {pendingWithdrawals > 9 ? '9+' : pendingWithdrawals}
+                    </span>
+                  )}
                 </div>
                 <span className={`text-[10px] font-medium ${active ? 'text-gold' : 'text-muted-foreground'}`}>
                   {item.name}
@@ -1260,7 +1267,7 @@ const ORDER_STATUS_META: Record<string, { label: string; color: string }> = {
   failed:  { label: 'Ошибка',    color: 'text-red-400'     },
 };
 
-function AdminView() {
+function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void }) {
   const [password, setPassword] = useState('');
   const [authed, setAuthed] = useState(false);
   const [authError, setAuthError] = useState('');
@@ -1276,8 +1283,12 @@ function AdminView() {
 
   const fetchStats = useCallback(async (pwd: string) => {
     const res = await fetch(`${ADMIN_API}?type=stats`, { headers: { 'X-Admin-Password': pwd } });
-    if (res.ok) setStats(await res.json());
-  }, []);
+    if (res.ok) {
+      const data = await res.json();
+      setStats(data);
+      onPendingChange?.(data.wd_pending_count || 0);
+    }
+  }, [onPendingChange]);
 
   const fetchData = useCallback(async (pwd: string, type: 'withdrawals' | 'orders', statusFilter = '') => {
     setLoading(true);
@@ -1360,13 +1371,12 @@ function AdminView() {
   useEffect(() => {
     if (!authed) return;
     const interval = window.setInterval(async () => {
-      // Загружаем данные
       fetchData(passwordRef.current, tab, filter);
-      // Проверяем статистику и сравниваем кол-во pending
       const res = await fetch(`${ADMIN_API}?type=stats`, { headers: { 'X-Admin-Password': passwordRef.current } });
       if (res.ok) {
         const data = await res.json();
         setStats(data);
+        onPendingChange?.(data.wd_pending_count || 0);
         const newPending: number = data.wd_pending_count || 0;
         if (prevWdCountRef.current !== null && newPending > prevWdCountRef.current) {
           notifyNewWithdrawal(newPending);
