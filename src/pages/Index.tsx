@@ -251,76 +251,753 @@ function GamesView({ openGame }: { openGame: (id: string, name: string) => void 
   );
 }
 
-function DepositView({ notify }: { notify: (m: string) => void }) {
+const DEPOSIT_AMOUNTS = [500, 1000, 2000, 5000, 10000, 25000];
+
+const DEPOSIT_METHODS = [
+  {
+    id: 'card',
+    name: 'Банковская карта',
+    desc: 'Visa, Mastercard, МИР',
+    icon: 'CreditCard',
+    min: 500,
+    instant: true,
+  },
+  {
+    id: 'sbp',
+    name: 'СБП',
+    desc: 'Система быстрых платежей',
+    icon: 'Zap',
+    min: 100,
+    instant: true,
+  },
+  {
+    id: 'ymoney',
+    name: 'ЮMoney',
+    desc: 'Электронный кошелёк',
+    icon: 'Wallet',
+    min: 100,
+    instant: true,
+  },
+  {
+    id: 'crypto',
+    name: 'Крипто (USDT)',
+    desc: 'TRC-20 / ERC-20',
+    icon: 'Bitcoin',
+    min: 1000,
+    instant: false,
+  },
+];
+
+type DepositStep = 'method' | 'amount' | 'card-form' | 'sbp-form' | 'ymoney-form' | 'crypto-form' | 'success';
+
+function DepositView({ notify: _notify }: { notify: (m: string) => void }) {
+  const [step, setStep] = useState<DepositStep>('method');
+  const [method, setMethod] = useState<typeof DEPOSIT_METHODS[0] | null>(null);
   const [amount, setAmount] = useState(1000);
-  const methods = [
-    { name: 'Банковская карта', icon: 'CreditCard' },
-    { name: 'СБП', icon: 'Smartphone' },
-    { name: 'Крипто (USDT)', icon: 'Bitcoin' },
-    { name: 'ЮMoney', icon: 'Wallet' },
-  ];
-  return (
-    <div className="space-y-5">
-      <SectionTitle title="Пополнение" subtitle="Пополни баланс мгновенно" icon="ArrowDownToLine" />
-      <div className="glass rounded-2xl p-5 animate-float-up">
-        <span className="text-xs uppercase tracking-wider text-muted-foreground">Сумма пополнения</span>
-        <div className="flex items-end gap-1 mt-1 mb-4">
-          <span className="font-display text-4xl font-bold gold-text tabular-nums">{amount.toLocaleString('ru')}</span>
-          <span className="text-gold/70 mb-1">₽</span>
-        </div>
-        <div className="grid grid-cols-4 gap-2">
-          {[500, 1000, 5000, 10000].map((v) => (
-            <button
-              key={v}
-              onClick={() => setAmount(v)}
-              className={`py-2 rounded-xl text-sm font-semibold transition-all ${amount === v ? 'gold-gradient text-background' : 'glass text-foreground/70'}`}
-            >
-              {v >= 1000 ? `${v / 1000}к` : v}
-            </button>
-          ))}
+  const [customAmount, setCustomAmount] = useState('');
+  const [cardNum, setCardNum] = useState('');
+  const [cardExp, setCardExp] = useState('');
+  const [cardCvv, setCardCvv] = useState('');
+  const [cardName, setCardName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [walletId, setWalletId] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const finalAmount = customAmount ? parseInt(customAmount) || 0 : amount;
+
+  const formatCard = (v: string) =>
+    v.replace(/\D/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim();
+
+  const formatExp = (v: string) => {
+    const digits = v.replace(/\D/g, '').slice(0, 4);
+    return digits.length >= 3 ? digits.slice(0, 2) + '/' + digits.slice(2) : digits;
+  };
+
+  const formatPhone = (v: string) => {
+    const digits = v.replace(/\D/g, '').slice(0, 11);
+    if (digits.length === 0) return '';
+    let res = '+7';
+    if (digits.length > 1) res += ' (' + digits.slice(1, 4);
+    if (digits.length > 4) res += ') ' + digits.slice(4, 7);
+    if (digits.length > 7) res += '-' + digits.slice(7, 9);
+    if (digits.length > 9) res += '-' + digits.slice(9, 11);
+    return res;
+  };
+
+  const handlePay = () => {
+    setLoading(true);
+    setTimeout(() => {
+      setLoading(false);
+      setStep('success');
+    }, 2000);
+  };
+
+  const reset = () => {
+    setStep('method');
+    setMethod(null);
+    setCardNum(''); setCardExp(''); setCardCvv(''); setCardName('');
+    setPhone(''); setWalletId(''); setCustomAmount('');
+    setAmount(1000);
+  };
+
+  const inputCls = 'w-full bg-background/60 border border-gold/20 rounded-xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-foreground placeholder:text-muted-foreground/50';
+
+  // ── SUCCESS ──
+  if (step === 'success') {
+    return (
+      <div className="space-y-5">
+        <SectionTitle title="Пополнение" subtitle="Пополни баланс мгновенно" icon="ArrowDownToLine" />
+        <div className="animate-win-pop glass rounded-3xl p-8 flex flex-col items-center gap-4 text-center glow-soft">
+          <div className="w-20 h-20 rounded-full gold-gradient flex items-center justify-center glow-gold">
+            <Icon name="Check" size={36} className="text-background" />
+          </div>
+          <div>
+            <h3 className="font-display text-2xl font-bold gold-text">Заявка принята!</h3>
+            <p className="text-muted-foreground text-sm mt-1">Сумма {finalAmount.toLocaleString('ru')} ₽ будет зачислена после подтверждения</p>
+          </div>
+          <div className="w-full glass rounded-2xl p-4 space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Метод</span>
+              <span className="font-medium">{method?.name}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Сумма</span>
+              <span className="font-display font-bold gold-text">{finalAmount.toLocaleString('ru')} ₽</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Статус</span>
+              <span className="text-emerald-400 font-medium flex items-center gap-1">
+                <Icon name="Clock" size={13} /> Обработка
+              </span>
+            </div>
+          </div>
+          <Button onClick={reset} className="w-full gold-gradient text-background font-bold h-12 glow-gold">
+            <Icon name="Plus" size={18} className="mr-2" /> Ещё пополнение
+          </Button>
         </div>
       </div>
-      <div className="space-y-2.5">
-        {methods.map((m, i) => (
+    );
+  }
+
+  // ── CARD FORM ──
+  if (step === 'card-form') {
+    const valid = cardNum.replace(/\s/g, '').length === 16 && cardExp.length === 5 && cardCvv.length === 3 && cardName.length >= 3;
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center gap-3 animate-float-up">
+          <button onClick={() => setStep('amount')} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
+            <Icon name="ArrowLeft" size={20} />
+          </button>
+          <div>
+            <h2 className="font-display text-xl font-bold">Банковская карта</h2>
+            <p className="text-sm text-muted-foreground">{finalAmount.toLocaleString('ru')} ₽</p>
+          </div>
+        </div>
+
+        {/* Card preview */}
+        <div className="animate-float-up relative rounded-2xl overflow-hidden p-5" style={{ animationDelay: '60ms', background: 'linear-gradient(135deg, hsl(240 30% 18%), hsl(240 20% 12%))', border: '1px solid hsl(43 74% 52% / 0.25)' }}>
+          <div className="absolute top-3 right-3 opacity-20">
+            <Icon name="CreditCard" size={48} className="text-gold" />
+          </div>
+          <div className="text-xs text-muted-foreground mb-4 uppercase tracking-wider">Банковская карта</div>
+          <div className="font-display text-xl font-bold tracking-widest text-white/90 mb-4">
+            {(cardNum || '•••• •••• •••• ••••')}
+          </div>
+          <div className="flex justify-between text-sm">
+            <div>
+              <div className="text-[10px] text-muted-foreground uppercase">Держатель</div>
+              <div className="font-medium text-white/80">{cardName || 'IVAN IVANOV'}</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-muted-foreground uppercase">Срок</div>
+              <div className="font-medium text-white/80">{cardExp || 'MM/YY'}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="animate-float-up space-y-3" style={{ animationDelay: '100ms' }}>
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Номер карты</label>
+            <input className={inputCls} placeholder="0000 0000 0000 0000" value={cardNum}
+              onChange={e => setCardNum(formatCard(e.target.value))} inputMode="numeric" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Срок</label>
+              <input className={inputCls} placeholder="MM/YY" value={cardExp}
+                onChange={e => setCardExp(formatExp(e.target.value))} inputMode="numeric" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">CVV</label>
+              <input className={inputCls} placeholder="•••" type="password" maxLength={3} value={cardCvv}
+                onChange={e => setCardCvv(e.target.value.replace(/\D/g, '').slice(0, 3))} inputMode="numeric" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Имя на карте</label>
+            <input className={inputCls} placeholder="IVAN IVANOV" value={cardName}
+              onChange={e => setCardName(e.target.value.toUpperCase())} />
+          </div>
+        </div>
+
+        <div className="animate-float-up glass rounded-xl p-3 flex items-center gap-2 text-xs text-muted-foreground" style={{ animationDelay: '140ms' }}>
+          <Icon name="Lock" size={14} className="text-gold shrink-0" />
+          Данные защищены шифрованием SSL. Карта не сохраняется.
+        </div>
+
+        <Button onClick={handlePay} disabled={!valid || loading}
+          className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
+          {loading
+            ? <><Icon name="Loader" size={20} className="mr-2 animate-spin" /> Обработка...</>
+            : <><Icon name="Lock" size={20} className="mr-2" /> Оплатить {finalAmount.toLocaleString('ru')} ₽</>}
+        </Button>
+      </div>
+    );
+  }
+
+  // ── SBP FORM ──
+  if (step === 'sbp-form') {
+    const valid = phone.replace(/\D/g, '').length === 11;
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center gap-3 animate-float-up">
+          <button onClick={() => setStep('amount')} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
+            <Icon name="ArrowLeft" size={20} />
+          </button>
+          <div>
+            <h2 className="font-display text-xl font-bold">СБП</h2>
+            <p className="text-sm text-muted-foreground">{finalAmount.toLocaleString('ru')} ₽</p>
+          </div>
+        </div>
+
+        <div className="animate-float-up glass rounded-2xl p-5 flex flex-col items-center gap-3 text-center" style={{ animationDelay: '60ms' }}>
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-4xl" style={{ background: 'linear-gradient(135deg, #1a2f6e, #7b2fbe)' }}>
+            ⚡
+          </div>
+          <div>
+            <div className="font-display font-bold text-lg">Система быстрых платежей</div>
+            <div className="text-sm text-muted-foreground">Перевод по номеру телефона через СБП</div>
+          </div>
+        </div>
+
+        <div className="animate-float-up space-y-3" style={{ animationDelay: '100ms' }}>
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Номер телефона</label>
+            <input className={inputCls} placeholder="+7 (999) 000-00-00" value={phone}
+              onChange={e => setPhone(formatPhone(e.target.value))} inputMode="tel" />
+          </div>
+          <div className="glass rounded-xl p-4 space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Сумма перевода</span>
+              <span className="font-display font-bold gold-text">{finalAmount.toLocaleString('ru')} ₽</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Комиссия</span>
+              <span className="text-emerald-400 font-medium">0 ₽</span>
+            </div>
+            <div className="w-full h-px bg-gold/10" />
+            <div className="flex justify-between font-bold">
+              <span>Итого</span>
+              <span className="gold-text">{finalAmount.toLocaleString('ru')} ₽</span>
+            </div>
+          </div>
+        </div>
+
+        <Button onClick={handlePay} disabled={!valid || loading}
+          className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
+          {loading
+            ? <><Icon name="Loader" size={20} className="mr-2 animate-spin" /> Обработка...</>
+            : <><Icon name="Zap" size={20} className="mr-2" /> Перевести {finalAmount.toLocaleString('ru')} ₽</>}
+        </Button>
+      </div>
+    );
+  }
+
+  // ── YMONEY FORM ──
+  if (step === 'ymoney-form') {
+    const valid = walletId.replace(/\D/g, '').length >= 10;
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center gap-3 animate-float-up">
+          <button onClick={() => setStep('amount')} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
+            <Icon name="ArrowLeft" size={20} />
+          </button>
+          <div>
+            <h2 className="font-display text-xl font-bold">ЮMoney</h2>
+            <p className="text-sm text-muted-foreground">{finalAmount.toLocaleString('ru')} ₽</p>
+          </div>
+        </div>
+
+        <div className="animate-float-up space-y-3" style={{ animationDelay: '60ms' }}>
+          <div className="glass rounded-2xl p-5 flex items-center gap-4">
+            <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-3xl shrink-0" style={{ background: 'linear-gradient(135deg, #8b00ff, #5500cc)' }}>
+              💜
+            </div>
+            <div>
+              <div className="font-bold">ЮMoney кошелёк</div>
+              <div className="text-sm text-muted-foreground">Введи номер кошелька</div>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Номер кошелька</label>
+            <input className={inputCls} placeholder="4100 1234 5678 90" value={walletId}
+              onChange={e => setWalletId(e.target.value.replace(/\D/g, '').slice(0, 16))} inputMode="numeric" />
+          </div>
+          <div className="glass rounded-xl p-4 text-sm flex justify-between">
+            <span className="text-muted-foreground">К оплате</span>
+            <span className="font-display font-bold gold-text">{finalAmount.toLocaleString('ru')} ₽</span>
+          </div>
+        </div>
+
+        <Button onClick={handlePay} disabled={!valid || loading}
+          className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
+          {loading
+            ? <><Icon name="Loader" size={20} className="mr-2 animate-spin" /> Обработка...</>
+            : <><Icon name="Wallet" size={20} className="mr-2" /> Пополнить {finalAmount.toLocaleString('ru')} ₽</>}
+        </Button>
+      </div>
+    );
+  }
+
+  // ── CRYPTO FORM ──
+  if (step === 'crypto-form') {
+    const WALLET_ADDR = 'TRx9dK2mQpLvXcYh8NbwAeR5sJfU3gZqP';
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center gap-3 animate-float-up">
+          <button onClick={() => setStep('amount')} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
+            <Icon name="ArrowLeft" size={20} />
+          </button>
+          <div>
+            <h2 className="font-display text-xl font-bold">USDT</h2>
+            <p className="text-sm text-muted-foreground">≈ {(finalAmount / 90).toFixed(2)} USDT</p>
+          </div>
+        </div>
+
+        <div className="animate-float-up glass rounded-2xl p-5 flex flex-col items-center gap-4 text-center" style={{ animationDelay: '60ms' }}>
+          {/* QR placeholder */}
+          <div className="w-40 h-40 rounded-2xl flex items-center justify-center" style={{ background: 'white' }}>
+            <div className="grid grid-cols-5 grid-rows-5 gap-1 w-32 h-32 p-2">
+              {Array.from({ length: 25 }).map((_, i) => (
+                <div key={i} className="rounded-[2px]"
+                  style={{ background: [0,1,2,3,4,5,9,10,14,15,19,20,21,22,23,24,7,12,17].includes(i) ? '#111' : 'white' }} />
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Адрес кошелька TRC-20</div>
+            <div className="font-mono text-xs break-all text-foreground/80 bg-background/50 rounded-lg px-3 py-2">{WALLET_ADDR}</div>
+          </div>
           <button
-            key={m.name}
-            onClick={() => notify(`Пополнение через ${m.name}`)}
-            className="animate-float-up w-full glass rounded-2xl p-4 flex items-center gap-3 hover-lift"
+            onClick={() => { navigator.clipboard.writeText(WALLET_ADDR); toast('Адрес скопирован'); }}
+            className="flex items-center gap-2 glass rounded-xl px-4 py-2 text-sm font-medium text-gold"
+          >
+            <Icon name="Copy" size={16} /> Скопировать адрес
+          </button>
+        </div>
+
+        <div className="animate-float-up glass rounded-xl p-4 space-y-2 text-sm" style={{ animationDelay: '100ms' }}>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Сумма в USDT</span>
+            <span className="font-bold gold-text">{(finalAmount / 90).toFixed(2)} USDT</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Сеть</span>
+            <span className="font-medium">TRC-20 (TRON)</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Зачисление</span>
+            <span className="text-amber-400">3–10 минут</span>
+          </div>
+        </div>
+
+        <div className="animate-float-up glass rounded-xl p-3 flex items-start gap-2 text-xs text-muted-foreground" style={{ animationDelay: '120ms' }}>
+          <Icon name="AlertTriangle" size={14} className="text-amber-400 shrink-0 mt-0.5" />
+          Отправляй только USDT на сеть TRC-20. Другие монеты и сети не поддерживаются.
+        </div>
+
+        <Button onClick={handlePay} disabled={loading}
+          className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
+          {loading
+            ? <><Icon name="Loader" size={20} className="mr-2 animate-spin" /> Проверяю платёж...</>
+            : <><Icon name="Check" size={20} className="mr-2" /> Я отправил USDT</>}
+        </Button>
+      </div>
+    );
+  }
+
+  // ── AMOUNT STEP ──
+  if (step === 'amount' && method) {
+    const nextStep = () => {
+      if (method.id === 'card') setStep('card-form');
+      else if (method.id === 'sbp') setStep('sbp-form');
+      else if (method.id === 'ymoney') setStep('ymoney-form');
+      else setStep('crypto-form');
+    };
+    const valid = finalAmount >= method.min;
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center gap-3 animate-float-up">
+          <button onClick={() => setStep('method')} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
+            <Icon name="ArrowLeft" size={20} />
+          </button>
+          <div>
+            <h2 className="font-display text-xl font-bold">{method.name}</h2>
+            <p className="text-sm text-muted-foreground">Минимум {method.min.toLocaleString('ru')} ₽</p>
+          </div>
+        </div>
+
+        <div className="animate-float-up glass rounded-2xl p-5 space-y-4" style={{ animationDelay: '60ms' }}>
+          <div>
+            <span className="text-xs uppercase tracking-wider text-muted-foreground">Сумма пополнения</span>
+            <div className="flex items-end gap-1 mt-1">
+              <span className="font-display text-4xl font-bold gold-text tabular-nums">
+                {finalAmount > 0 ? finalAmount.toLocaleString('ru') : '—'}
+              </span>
+              <span className="text-gold/70 mb-1">₽</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {DEPOSIT_AMOUNTS.map(v => (
+              <button key={v}
+                onClick={() => { setAmount(v); setCustomAmount(''); }}
+                className={`py-2.5 rounded-xl text-sm font-semibold transition-all ${amount === v && !customAmount ? 'gold-gradient text-background' : 'bg-background/50 text-foreground/70'}`}>
+                {v >= 1000 ? `${v / 1000}к` : v}
+              </button>
+            ))}
+          </div>
+          <div>
+            <input
+              className={inputCls + ' text-center font-display text-lg'}
+              placeholder="Своя сумма"
+              value={customAmount}
+              onChange={e => setCustomAmount(e.target.value.replace(/\D/g, ''))}
+              inputMode="numeric"
+            />
+          </div>
+        </div>
+
+        <div className="animate-float-up glass rounded-xl p-4 space-y-2 text-sm" style={{ animationDelay: '100ms' }}>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Комиссия</span>
+            <span className="text-emerald-400 font-medium">0 ₽</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Зачисление</span>
+            <span className="font-medium">{method.instant ? 'Мгновенно' : '3–10 минут'}</span>
+          </div>
+          <div className="w-full h-px bg-gold/10" />
+          <div className="flex justify-between font-bold">
+            <span>К зачислению</span>
+            <span className="gold-text">{finalAmount > 0 ? finalAmount.toLocaleString('ru') : '—'} ₽</span>
+          </div>
+        </div>
+
+        <Button onClick={nextStep} disabled={!valid}
+          className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
+          Продолжить →
+        </Button>
+      </div>
+    );
+  }
+
+  // ── METHOD STEP (default) ──
+  return (
+    <div className="space-y-5">
+      <SectionTitle title="Пополнение" subtitle="Выбери удобный способ" icon="ArrowDownToLine" />
+      <div className="space-y-3">
+        {DEPOSIT_METHODS.map((m, i) => (
+          <button
+            key={m.id}
+            onClick={() => { setMethod(m); setStep('amount'); }}
+            className="animate-float-up w-full glass rounded-2xl p-4 flex items-center gap-4 hover-lift transition-all"
             style={{ animationDelay: `${i * 60}ms` }}
           >
-            <div className="w-10 h-10 rounded-xl bg-gold/10 flex items-center justify-center text-gold">
-              <Icon name={m.icon} size={20} />
+            <div className="w-12 h-12 rounded-xl bg-gold/10 flex items-center justify-center text-gold shrink-0">
+              <Icon name={m.icon} size={22} />
             </div>
-            <span className="font-medium flex-1 text-left">{m.name}</span>
-            <Icon name="ChevronRight" size={18} className="text-muted-foreground" />
+            <div className="flex-1 text-left">
+              <div className="font-semibold">{m.name}</div>
+              <div className="text-xs text-muted-foreground mt-0.5">{m.desc}</div>
+            </div>
+            <div className="flex flex-col items-end gap-1 shrink-0">
+              {m.instant && (
+                <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-400/10 rounded-full px-2 py-0.5">Мгновенно</span>
+              )}
+              <span className="text-xs text-muted-foreground">от {m.min.toLocaleString('ru')} ₽</span>
+            </div>
           </button>
         ))}
+      </div>
+      <div className="animate-float-up glass rounded-xl p-3 flex items-center gap-2 text-xs text-muted-foreground" style={{ animationDelay: '280ms' }}>
+        <Icon name="ShieldCheck" size={14} className="text-gold shrink-0" />
+        Все платежи защищены. Данные не передаются третьим лицам.
       </div>
     </div>
   );
 }
 
-function WithdrawView({ balance, notify }: { balance: number; notify: (m: string) => void }) {
+const WITHDRAW_METHODS = [
+  { id: 'card', name: 'Банковская карта', desc: 'Visa, Mastercard, МИР', icon: 'CreditCard', time: '15 минут', min: 500 },
+  { id: 'sbp',  name: 'СБП',              desc: 'По номеру телефона',    icon: 'Zap',        time: '5 минут',  min: 100  },
+  { id: 'ymoney', name: 'ЮMoney',         desc: 'На кошелёк',           icon: 'Wallet',     time: '15 минут', min: 100  },
+  { id: 'crypto', name: 'Крипто (USDT)',  desc: 'TRC-20 / ERC-20',      icon: 'Bitcoin',    time: '30 минут', min: 1000 },
+];
+
+type WithdrawStep = 'method' | 'form' | 'confirm' | 'success';
+
+function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (m: string) => void }) {
+  const [step, setStep] = useState<WithdrawStep>('method');
+  const [method, setMethod] = useState<typeof WITHDRAW_METHODS[0] | null>(null);
+  const [amount, setAmount] = useState('');
+  const [destination, setDestination] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const parsedAmount = parseInt(amount) || 0;
+  const inputCls = 'w-full bg-background/60 border border-gold/20 rounded-xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-foreground placeholder:text-muted-foreground/50';
+
+  const reset = () => {
+    setStep('method'); setMethod(null); setAmount(''); setDestination('');
+  };
+
+  const handleSubmit = () => {
+    setLoading(true);
+    setTimeout(() => { setLoading(false); setStep('success'); }, 2000);
+  };
+
+  const destPlaceholder = method?.id === 'card' ? '0000 0000 0000 0000'
+    : method?.id === 'sbp' ? '+7 (999) 000-00-00'
+    : method?.id === 'ymoney' ? '4100 1234 5678 90'
+    : 'Адрес кошелька USDT TRC-20';
+
+  const destLabel = method?.id === 'card' ? 'Номер карты'
+    : method?.id === 'sbp' ? 'Номер телефона'
+    : method?.id === 'ymoney' ? 'Номер кошелька'
+    : 'Адрес кошелька';
+
+  // ── SUCCESS ──
+  if (step === 'success') {
+    return (
+      <div className="space-y-5">
+        <SectionTitle title="Вывод средств" subtitle="Выведи выигрыш" icon="ArrowUpFromLine" />
+        <div className="animate-win-pop glass rounded-3xl p-8 flex flex-col items-center gap-4 text-center glow-soft">
+          <div className="w-20 h-20 rounded-full flex items-center justify-center glow-gold"
+            style={{ background: 'linear-gradient(135deg, hsl(var(--emerald)), hsl(158 50% 35%))' }}>
+            <Icon name="Check" size={36} className="text-white" />
+          </div>
+          <div>
+            <h3 className="font-display text-2xl font-bold text-emerald-400">Заявка создана!</h3>
+            <p className="text-muted-foreground text-sm mt-1">
+              {parsedAmount.toLocaleString('ru')} ₽ будут отправлены в течение {method?.time}
+            </p>
+          </div>
+          <div className="w-full glass rounded-2xl p-4 space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Метод</span>
+              <span className="font-medium">{method?.name}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Реквизиты</span>
+              <span className="font-medium font-mono text-xs">{destination.slice(0, 6)}••••{destination.slice(-4)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Сумма</span>
+              <span className="font-display font-bold text-emerald-400">{parsedAmount.toLocaleString('ru')} ₽</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Статус</span>
+              <span className="text-amber-400 font-medium flex items-center gap-1">
+                <Icon name="Clock" size={13} /> Обработка
+              </span>
+            </div>
+          </div>
+          <Button onClick={reset} variant="outline" className="w-full border-gold/30 text-gold bg-transparent h-12 font-bold hover:bg-gold/10">
+            <Icon name="ArrowLeft" size={18} className="mr-2" /> Назад к кассе
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── CONFIRM ──
+  if (step === 'confirm' && method) {
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center gap-3 animate-float-up">
+          <button onClick={() => setStep('form')} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
+            <Icon name="ArrowLeft" size={20} />
+          </button>
+          <h2 className="font-display text-xl font-bold">Подтверждение</h2>
+        </div>
+
+        <div className="animate-float-up glass rounded-2xl p-5 space-y-3" style={{ animationDelay: '60ms' }}>
+          <h3 className="font-display font-semibold text-muted-foreground text-xs uppercase tracking-wider">Детали вывода</h3>
+          {[
+            { label: 'Метод', value: method.name },
+            { label: destLabel, value: `${destination.slice(0, 4)} •••• ${destination.slice(-4)}` },
+            { label: 'Сумма вывода', value: `${parsedAmount.toLocaleString('ru')} ₽`, bold: true },
+            { label: 'Комиссия', value: '0 ₽', green: true },
+            { label: 'Получите', value: `${parsedAmount.toLocaleString('ru')} ₽`, gold: true },
+            { label: 'Время', value: method.time },
+          ].map(row => (
+            <div key={row.label} className="flex justify-between items-center py-1 border-b border-gold/5 last:border-0">
+              <span className="text-sm text-muted-foreground">{row.label}</span>
+              <span className={`text-sm font-medium ${row.gold ? 'gold-text font-display font-bold text-base' : row.green ? 'text-emerald-400' : row.bold ? 'font-semibold' : ''}`}>
+                {row.value}
+              </span>
+            </div>
+          ))}
+        </div>
+
+        <div className="animate-float-up glass rounded-xl p-3 flex items-center gap-2 text-xs text-muted-foreground" style={{ animationDelay: '100ms' }}>
+          <Icon name="ShieldCheck" size={14} className="text-gold shrink-0" />
+          После подтверждения средства будут отправлены и не подлежат отмене.
+        </div>
+
+        <Button onClick={handleSubmit} disabled={loading}
+          className="w-full font-bold text-lg h-14 disabled:opacity-50"
+          style={{ background: 'linear-gradient(135deg, hsl(var(--emerald)), hsl(158 50% 35%))', color: 'white' }}>
+          {loading
+            ? <><Icon name="Loader" size={20} className="mr-2 animate-spin" /> Отправляем...</>
+            : <><Icon name="Send" size={20} className="mr-2" /> Подтвердить вывод</>}
+        </Button>
+      </div>
+    );
+  }
+
+  // ── FORM ──
+  if (step === 'form' && method) {
+    const valid = parsedAmount >= method.min && parsedAmount <= balance && destination.length >= 8;
+    const presets = [500, 1000, 2000, 5000].filter(v => v <= balance);
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center gap-3 animate-float-up">
+          <button onClick={() => setStep('method')} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
+            <Icon name="ArrowLeft" size={20} />
+          </button>
+          <div>
+            <h2 className="font-display text-xl font-bold">{method.name}</h2>
+            <p className="text-sm text-muted-foreground">Доступно {balance.toLocaleString('ru')} ₽</p>
+          </div>
+        </div>
+
+        {/* Balance card */}
+        <div className="animate-float-up glass rounded-2xl p-4 flex items-center justify-between" style={{ animationDelay: '60ms' }}>
+          <div>
+            <div className="text-xs text-muted-foreground uppercase tracking-wider">Доступно к выводу</div>
+            <div className="font-display text-2xl font-bold gold-text tabular-nums mt-0.5">{balance.toLocaleString('ru')} ₽</div>
+          </div>
+          <button
+            onClick={() => setAmount(String(balance))}
+            className="text-xs font-semibold text-gold glass rounded-xl px-3 py-1.5"
+          >
+            Всё
+          </button>
+        </div>
+
+        <div className="animate-float-up space-y-3" style={{ animationDelay: '80ms' }}>
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Сумма вывода</label>
+            <input className={inputCls + ' font-display text-lg'} placeholder={`Минимум ${method.min.toLocaleString('ru')} ₽`}
+              value={amount} onChange={e => setAmount(e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
+          </div>
+          {presets.length > 0 && (
+            <div className="grid grid-cols-4 gap-2">
+              {presets.map(v => (
+                <button key={v}
+                  onClick={() => setAmount(String(v))}
+                  className={`py-2 rounded-xl text-sm font-semibold transition-all ${amount === String(v) ? 'gold-gradient text-background' : 'bg-background/50 text-foreground/70'}`}>
+                  {v >= 1000 ? `${v / 1000}к` : v}
+                </button>
+              ))}
+            </div>
+          )}
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">{destLabel}</label>
+            <input className={inputCls} placeholder={destPlaceholder}
+              value={destination} onChange={e => setDestination(e.target.value)} />
+          </div>
+
+          {parsedAmount > balance && (
+            <div className="flex items-center gap-2 text-xs text-red-400">
+              <Icon name="AlertCircle" size={14} /> Сумма превышает доступный баланс
+            </div>
+          )}
+        </div>
+
+        <div className="animate-float-up glass rounded-xl p-4 space-y-1.5 text-sm" style={{ animationDelay: '120ms' }}>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Комиссия</span>
+            <span className="text-emerald-400 font-medium">0 ₽</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Время обработки</span>
+            <span className="font-medium">{method.time}</span>
+          </div>
+        </div>
+
+        <Button onClick={() => setStep('confirm')} disabled={!valid}
+          className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
+          Продолжить →
+        </Button>
+      </div>
+    );
+  }
+
+  // ── METHOD (default) ──
+  const canWithdraw = balance >= 100;
   return (
     <div className="space-y-5">
-      <SectionTitle title="Вывод средств" subtitle="Выведи выигрыш на карту" icon="ArrowUpFromLine" />
-      <div className="glass rounded-2xl p-5 animate-float-up text-center">
-        <span className="text-xs uppercase tracking-wider text-muted-foreground">Доступно к выводу</span>
-        <div className="font-display text-4xl font-bold gold-text my-2 tabular-nums">{balance.toLocaleString('ru')} ₽</div>
-        <input
-          placeholder="Введите сумму"
-          className="w-full bg-background/50 border border-gold/20 rounded-xl px-4 py-3 text-center font-display text-lg outline-none focus:border-gold/50 transition-colors mt-2"
-        />
-        <input
-          placeholder="Номер карты / кошелька"
-          className="w-full bg-background/50 border border-gold/20 rounded-xl px-4 py-3 text-center outline-none focus:border-gold/50 transition-colors mt-3"
-        />
-        <Button onClick={() => notify('Запрос на вывод отправлен')} className="w-full gold-gradient text-background font-semibold h-12 mt-4 glow-gold">
-          <Icon name="Send" size={18} className="mr-1.5" /> Запросить вывод
-        </Button>
-        <p className="text-[11px] text-muted-foreground mt-3 flex items-center justify-center gap-1">
-          <Icon name="Clock" size={12} /> Обработка до 15 минут
-        </p>
+      <SectionTitle title="Вывод средств" subtitle="Выведи выигрыш" icon="ArrowUpFromLine" />
+
+      {/* Balance */}
+      <div className="animate-float-up relative glass rounded-2xl p-5 overflow-hidden">
+        <div className="absolute inset-0 shimmer-line opacity-20 pointer-events-none" />
+        <div className="relative">
+          <span className="text-xs uppercase tracking-wider text-muted-foreground">Доступно к выводу</span>
+          <div className="font-display text-4xl font-bold gold-text tabular-nums mt-1">{balance.toLocaleString('ru')} ₽</div>
+          {!canWithdraw && (
+            <div className="mt-2 flex items-center gap-1.5 text-xs text-amber-400">
+              <Icon name="AlertTriangle" size={13} /> Минимальная сумма вывода — 100 ₽
+            </div>
+          )}
+        </div>
+      </div>
+
+      {canWithdraw ? (
+        <div className="space-y-3">
+          {WITHDRAW_METHODS.map((m, i) => (
+            <button
+              key={m.id}
+              onClick={() => { setMethod(m); setStep('form'); }}
+              disabled={balance < m.min}
+              className="animate-float-up w-full glass rounded-2xl p-4 flex items-center gap-4 hover-lift transition-all disabled:opacity-40"
+              style={{ animationDelay: `${i * 60}ms` }}
+            >
+              <div className="w-12 h-12 rounded-xl bg-gold/10 flex items-center justify-center text-gold shrink-0">
+                <Icon name={m.icon} size={22} />
+              </div>
+              <div className="flex-1 text-left">
+                <div className="font-semibold">{m.name}</div>
+                <div className="text-xs text-muted-foreground mt-0.5">{m.desc}</div>
+              </div>
+              <div className="flex flex-col items-end gap-1 shrink-0">
+                <span className="text-[10px] font-semibold text-amber-400 bg-amber-400/10 rounded-full px-2 py-0.5">{m.time}</span>
+                <span className="text-xs text-muted-foreground">от {m.min.toLocaleString('ru')} ₽</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="animate-float-up glass rounded-2xl p-6 flex flex-col items-center gap-3 text-center">
+          <Icon name="TrendingUp" size={32} className="text-gold/40" />
+          <p className="text-muted-foreground text-sm">Сыграй и выиграй, чтобы вывести средства</p>
+        </div>
+      )}
+
+      <div className="animate-float-up glass rounded-xl p-3 flex items-center gap-2 text-xs text-muted-foreground" style={{ animationDelay: '280ms' }}>
+        <Icon name="ShieldCheck" size={14} className="text-gold shrink-0" />
+        Выплаты обрабатываются вручную. Комиссия 0%.
       </div>
     </div>
   );
