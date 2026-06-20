@@ -334,6 +334,82 @@ def handler(event: dict, context) -> dict:
             'last_bonus': last_bonus.isoformat() if last_bonus else None,
         }), 'isBase64Encoded': False}
 
+    # ── RECORD GAME (запись ставки) ──
+    if action == 'record-game' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        game = str(body.get('game', ''))
+        bet = float(body.get('bet', 0))
+        result = float(body.get('result', 0))
+        is_win = bool(body.get('is_win', False))
+        details = body.get('details', {})
+
+        cur.execute("""
+            INSERT INTO game_history (user_id, game, bet, result, is_win, details)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (user[0], game, bet, result, is_win, json.dumps(details)))
+        conn.commit(); cur.close(); conn.close()
+
+        return {'statusCode': 200, 'headers': HEADERS,
+                'body': json.dumps({'success': True}), 'isBase64Encoded': False}
+
+    # ── HISTORY (история ставок) ──
+    if action == 'history' and http_method == 'GET':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        cur.execute("""
+            SELECT game, bet, result, is_win, details, created_at
+            FROM game_history WHERE user_id = %s
+            ORDER BY created_at DESC LIMIT 100
+        """, (user[0],))
+        rows = cur.fetchall()
+
+        # Считаем статистику
+        cur.execute("""
+            SELECT
+                COUNT(*) AS total,
+                COUNT(*) FILTER (WHERE is_win) AS wins,
+                COALESCE(SUM(bet), 0) AS total_bet,
+                COALESCE(SUM(result) FILTER (WHERE is_win), 0) AS total_won,
+                COALESCE(SUM(bet) FILTER (WHERE NOT is_win), 0) AS total_lost
+            FROM game_history WHERE user_id = %s
+        """, (user[0],))
+        stat = cur.fetchone()
+        cur.close(); conn.close()
+
+        games = []
+        for row in rows:
+            games.append({
+                'game': row[0], 'bet': float(row[1]), 'result': float(row[2]),
+                'is_win': row[3], 'details': row[4] or {},
+                'created_at': row[5].isoformat()
+            })
+
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'games': games,
+            'stats': {
+                'total': int(stat[0]), 'wins': int(stat[1]),
+                'total_bet': float(stat[2]), 'total_won': float(stat[3]),
+                'total_lost': float(stat[4]),
+            }
+        }), 'isBase64Encoded': False}
+
     cur.close(); conn.close()
     return {'statusCode': 400, 'headers': HEADERS,
             'body': json.dumps({'error': 'Unknown action'}), 'isBase64Encoded': False}

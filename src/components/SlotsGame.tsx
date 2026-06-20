@@ -198,10 +198,12 @@ export default function SlotsGame({
   balance,
   onBalanceChange,
   onBack,
+  onGameResult,
 }: {
   balance: number;
   onBalanceChange: (delta: number) => void;
   onBack: () => void;
+  onGameResult?: (bet: number, result: number, isWin: boolean, details: object) => void;
 }) {
   const [bet, setBet] = useState(100);
   const [spinning, setSpinning] = useState(false);
@@ -262,6 +264,7 @@ export default function SlotsGame({
     const finish = window.setTimeout(() => {
       setSpinning(false);
       const { win, mult } = evaluate(picks, bet);
+      onGameResult?.(bet, win, win > 0, { mult, symbols: picks });
       if (win > 0) {
         onBalanceChange(win);
         setLastWin(win);

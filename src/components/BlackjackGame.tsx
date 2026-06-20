@@ -247,10 +247,12 @@ export default function BlackjackGame({
   balance,
   onBalanceChange,
   onBack,
+  onGameResult,
 }: {
   balance: number;
   onBalanceChange: (delta: number) => void;
   onBack: () => void;
+  onGameResult?: (bet: number, result: number, isWin: boolean, details: object) => void;
 }) {
   const [bet, setBet] = useState(100);
   const [phase, setPhase] = useState<Phase>('betting');
@@ -461,6 +463,7 @@ export default function BlackjackGame({
     setOutcome(result);
     setMessage(msg);
     setPhase('result');
+    onGameResult?.(baseBet, payout, payout > baseBet, { result, pScore, dScore });
 
     // reveal dealer hidden card if not done
     setDealerCards(dCards.map(c => ({ ...c, hidden: false })));

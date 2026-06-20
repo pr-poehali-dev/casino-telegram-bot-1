@@ -9,7 +9,7 @@ import DiceGame from '@/components/DiceGame';
 import RouletteGame from '@/components/RouletteGame';
 import BlackjackGame from '@/components/BlackjackGame';
 
-type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily';
+type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history';
 
 const GAMES = [
   { id: 'roulette', name: 'Рулетка', icon: 'CircleDot', desc: 'Красное или чёрное', accent: 'crimson', emoji: '🎡' },
@@ -82,6 +82,17 @@ export default function Index() {
     setBalance(0);
     setSection('home');
   };
+
+  // Запись результата игры в историю
+  const recordGame = useCallback(async (gameName: string, bet: number, result: number, isWin: boolean, details: object) => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!token) return;
+    fetch(`${AUTH_API}?action=record-game`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+      body: JSON.stringify({ game: gameName, bet, result, is_win: isWin, details }),
+    }).catch(() => {});
+  }, []);
 
   // Синхронизируем баланс с БД при изменении
   const syncBalance = useCallback(async (delta: number) => {
@@ -158,31 +169,36 @@ export default function Index() {
           {activeGame === 'slots' ? (
             <SlotsGame
               balance={balance}
-              onBalanceChange={(delta) => setBalance((b) => b + delta)}
+              onBalanceChange={(delta) => syncBalance(delta)}
+              onGameResult={(bet, result, isWin, details) => recordGame('Слоты', bet, result, isWin, details)}
               onBack={() => setActiveGame(null)}
             />
           ) : activeGame === 'coin' ? (
             <CoinGame
               balance={balance}
-              onBalanceChange={(delta) => setBalance((b) => b + delta)}
+              onBalanceChange={(delta) => syncBalance(delta)}
+              onGameResult={(bet, result, isWin, details) => recordGame('Монета', bet, result, isWin, details)}
               onBack={() => setActiveGame(null)}
             />
           ) : activeGame === 'dice' ? (
             <DiceGame
               balance={balance}
-              onBalanceChange={(delta) => setBalance((b) => b + delta)}
+              onBalanceChange={(delta) => syncBalance(delta)}
+              onGameResult={(bet, result, isWin, details) => recordGame('Кости', bet, result, isWin, details)}
               onBack={() => setActiveGame(null)}
             />
           ) : activeGame === 'roulette' ? (
             <RouletteGame
               balance={balance}
-              onBalanceChange={(delta) => setBalance((b) => b + delta)}
+              onBalanceChange={(delta) => syncBalance(delta)}
+              onGameResult={(bet, result, isWin, details) => recordGame('Рулетка', bet, result, isWin, details)}
               onBack={() => setActiveGame(null)}
             />
           ) : activeGame === 'blackjack' ? (
             <BlackjackGame
               balance={balance}
-              onBalanceChange={(delta) => setBalance((b) => b + delta)}
+              onBalanceChange={(delta) => syncBalance(delta)}
+              onGameResult={(bet, result, isWin, details) => recordGame('Блэкджек', bet, result, isWin, details)}
               onBack={() => setActiveGame(null)}
             />
           ) : (
@@ -197,6 +213,7 @@ export default function Index() {
               {section === 'admin' && <AdminView onPendingChange={setPendingWithdrawals} />}
               {section === 'referral' && <ReferralView user={user} onBack={() => setSection('profile')} />}
               {section === 'daily' && <DailyBonusView onBack={() => setSection('home')} onClaimed={(bonus, balance) => { syncBalance(0); setBalance(balance); setSection('home'); }} />}
+              {section === 'history' && <GameHistoryView onBack={() => setSection('profile')} />}
             </>
           )}
         </main>
@@ -1244,6 +1261,7 @@ function ProfileView({ setSection, notify, user, onLogout }: { setSection: (s: S
   const items: { name: string; icon: string; action: () => void; danger?: boolean; highlight?: boolean }[] = [
     { name: 'Пополнить баланс', icon: 'Wallet', action: () => setSection('deposit') },
     { name: 'Вывод средств', icon: 'ArrowUpFromLine', action: () => setSection('withdraw') },
+    { name: 'История игр', icon: 'History', action: () => setSection('history') },
     { name: 'Пригласить друга', icon: 'UserPlus', action: () => setSection('referral'), highlight: true },
     { name: 'Статистика', icon: 'TrendingUp', action: () => setSection('stats') },
     { name: 'Поддержка', icon: 'Headphones', action: () => setSection('support') },
@@ -1429,6 +1447,114 @@ function AuthScreen({ onSuccess }: { onSuccess: (token: string, user: AuthUser) 
           Продолжая, вы соглашаетесь с правилами казино. 18+
         </p>
       </div>
+    </div>
+  );
+}
+
+const GAME_ICONS: Record<string, string> = {
+  'Слоты': 'Cherry', 'Монета': 'CircleDollarSign',
+  'Кости': 'Dices', 'Рулетка': 'CircleDot', 'Блэкджек': 'Spade',
+};
+
+function GameHistoryView({ onBack }: { onBack: () => void }) {
+  const [data, setData] = useState<{
+    games: { game: string; bet: number; result: number; is_win: boolean; created_at: string }[];
+    stats: { total: number; wins: number; total_bet: number; total_won: number; total_lost: number };
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<'all' | 'wins' | 'losses'>('all');
+
+  useEffect(() => {
+    const token = localStorage.getItem('casino_auth_token');
+    if (!token) { setLoading(false); return; }
+    fetch(`${AUTH_API}?action=history`, { headers: { 'X-Auth-Token': token } })
+      .then(r => r.json())
+      .then(setData)
+      .finally(() => setLoading(false));
+  }, []);
+
+  const filtered = data?.games.filter(g =>
+    filter === 'all' ? true : filter === 'wins' ? g.is_win : !g.is_win
+  ) || [];
+
+  const winRate = data?.stats.total ? Math.round((data.stats.wins / data.stats.total) * 100) : 0;
+  const profit = data ? data.stats.total_won - data.stats.total_bet : 0;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
+          <Icon name="ArrowLeft" size={20} />
+        </button>
+        <div>
+          <h2 className="font-display text-xl font-bold">История игр</h2>
+          <p className="text-sm text-muted-foreground">Все твои ставки и результаты</p>
+        </div>
+      </div>
+
+      {/* Статистика */}
+      {data && (
+        <div className="grid grid-cols-2 gap-2">
+          <div className="glass rounded-2xl p-4 space-y-1">
+            <div className="text-xs text-muted-foreground">Игр сыграно</div>
+            <div className="font-display text-2xl font-bold gold-text">{data.stats.total}</div>
+            <div className="text-xs text-muted-foreground">побед: {data.stats.wins} ({winRate}%)</div>
+          </div>
+          <div className="glass rounded-2xl p-4 space-y-1">
+            <div className="text-xs text-muted-foreground">Чистый результат</div>
+            <div className={`font-display text-2xl font-bold ${profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              {profit >= 0 ? '+' : ''}{profit.toLocaleString('ru')} ₽
+            </div>
+            <div className="text-xs text-muted-foreground">поставлено: {data.stats.total_bet.toLocaleString('ru')} ₽</div>
+          </div>
+        </div>
+      )}
+
+      {/* Фильтр */}
+      <div className="grid grid-cols-3 gap-2">
+        {(['all', 'wins', 'losses'] as const).map(f => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={`py-2 rounded-xl text-xs font-semibold transition-all
+              ${filter === f ? 'gold-gradient text-background' : 'glass text-muted-foreground'}`}>
+            {f === 'all' ? 'Все' : f === 'wins' ? '✅ Победы' : '❌ Проигрыши'}
+          </button>
+        ))}
+      </div>
+
+      {/* Список */}
+      {loading ? (
+        <div className="flex justify-center py-12"><Icon name="Loader" size={24} className="animate-spin text-gold" /></div>
+      ) : filtered.length === 0 ? (
+        <div className="glass rounded-2xl p-10 text-center text-muted-foreground text-sm">
+          {data?.stats.total === 0 ? 'Сыграй первую игру — история появится здесь' : 'Нет записей'}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {filtered.map((g, i) => {
+            const delta = g.is_win ? g.result - g.bet : -g.bet;
+            return (
+              <div key={i} className="glass rounded-2xl p-4 flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0
+                  ${g.is_win ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'}`}>
+                  <Icon name={GAME_ICONS[g.game] || 'Dices'} size={18} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-center">
+                    <span className="font-semibold text-sm">{g.game}</span>
+                    <span className={`font-display font-bold ${delta >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {delta >= 0 ? '+' : ''}{delta.toLocaleString('ru')} ₽
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs text-muted-foreground mt-0.5">
+                    <span>Ставка: {g.bet.toLocaleString('ru')} ₽</span>
+                    <span>{new Date(g.created_at).toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

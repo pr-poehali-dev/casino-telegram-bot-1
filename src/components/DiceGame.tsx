@@ -193,10 +193,12 @@ export default function DiceGame({
   balance,
   onBalanceChange,
   onBack,
+  onGameResult,
 }: {
   balance: number;
   onBalanceChange: (delta: number) => void;
   onBack: () => void;
+  onGameResult?: (bet: number, result: number, isWin: boolean, details: object) => void;
 }) {
   const [bet, setBet] = useState(100);
   const [target, setTarget] = useState(7);
@@ -260,6 +262,7 @@ export default function DiceGame({
       const didWin = sum === target;
       const mult = SUM_PAYOUTS[target] ?? 4;
       const prize = didWin ? bet * mult : 0;
+      onGameResult?.(bet, prize, didWin, { target, sum: d1 + d2, mult });
 
       if (didWin) {
         onBalanceChange(prize);

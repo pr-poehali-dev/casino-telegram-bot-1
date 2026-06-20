@@ -195,10 +195,12 @@ export default function CoinGame({
   balance,
   onBalanceChange,
   onBack,
+  onGameResult,
 }: {
   balance: number;
   onBalanceChange: (delta: number) => void;
   onBack: () => void;
+  onGameResult?: (bet: number, result: number, isWin: boolean, details: object) => void;
 }) {
   const [bet, setBet] = useState(100);
   const [choice, setChoice] = useState<Choice>('heads');
@@ -251,6 +253,7 @@ export default function CoinGame({
     const t2 = window.setTimeout(() => {
       setPhase('result');
       const didWin = outcome === choice;
+      onGameResult?.(bet, didWin ? bet * 2 : 0, didWin, { choice, outcome });
       setWon(didWin);
       if (didWin) {
         onBalanceChange(bet * 2);

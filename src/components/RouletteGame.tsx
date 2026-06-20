@@ -301,10 +301,12 @@ export default function RouletteGame({
   balance,
   onBalanceChange,
   onBack,
+  onGameResult,
 }: {
   balance: number;
   onBalanceChange: (delta: number) => void;
   onBack: () => void;
+  onGameResult?: (bet: number, result: number, isWin: boolean, details: object) => void;
 }) {
   const [bet, setBet] = useState(100);
   const [bets, setBets] = useState<PlacedBet[]>([]);
@@ -403,6 +405,7 @@ export default function RouletteGame({
         }, 0);
 
         setTotalWin(win);
+        onGameResult?.(totalBet, win, win > 0, { number: targetResult });
         if (win > 0) {
           onBalanceChange(win);
           const ctx3 = getAudio();
