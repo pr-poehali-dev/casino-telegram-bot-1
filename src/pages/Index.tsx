@@ -9,7 +9,7 @@ import DiceGame from '@/components/DiceGame';
 import RouletteGame from '@/components/RouletteGame';
 import BlackjackGame from '@/components/BlackjackGame';
 
-type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history';
+type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard';
 
 const GAMES = [
   { id: 'roulette', name: 'Рулетка', icon: 'CircleDot', desc: 'Красное или чёрное', accent: 'crimson', emoji: '🎡' },
@@ -23,7 +23,7 @@ const NAV = [
   { id: 'home' as Section, name: 'Меню', icon: 'LayoutGrid' },
   { id: 'games' as Section, name: 'Игры', icon: 'Gamepad2' },
   { id: 'deposit' as Section, name: 'Касса', icon: 'Wallet' },
-  { id: 'stats' as Section, name: 'Стата', icon: 'TrendingUp' },
+  { id: 'leaderboard' as Section, name: 'Топ', icon: 'Trophy' },
   { id: 'profile' as Section, name: 'Профиль', icon: 'User' },
 ];
 
@@ -214,6 +214,7 @@ export default function Index() {
               {section === 'referral' && <ReferralView user={user} onBack={() => setSection('profile')} />}
               {section === 'daily' && <DailyBonusView onBack={() => setSection('home')} onClaimed={(bonus, balance) => { syncBalance(0); setBalance(balance); setSection('home'); }} />}
               {section === 'history' && <GameHistoryView onBack={() => setSection('profile')} />}
+              {section === 'leaderboard' && <LeaderboardView />}
             </>
           )}
         </main>
@@ -1447,6 +1448,142 @@ function AuthScreen({ onSuccess }: { onSuccess: (token: string, user: AuthUser) 
           Продолжая, вы соглашаетесь с правилами казино. 18+
         </p>
       </div>
+    </div>
+  );
+}
+
+const PERIOD_LABELS = { week: 'Неделя', month: 'Месяц', alltime: 'Всё время' };
+
+function LeaderboardView() {
+  const [period, setPeriod] = useState<'week' | 'month' | 'alltime'>('week');
+  const [data, setData] = useState<{
+    leaders: { rank: number; username: string; games: number; wins: number; profit: number }[];
+    my_rank: number | null;
+    my_profit: number | null;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async (p: string) => {
+    setLoading(true);
+    const token = localStorage.getItem('casino_auth_token') || '';
+    try {
+      const res = await fetch(`${AUTH_API}?action=leaderboard&period=${p}`,
+        { headers: token ? { 'X-Auth-Token': token } : {} });
+      if (res.ok) setData(await res.json());
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(period); }, [period, load]);
+
+  return (
+    <div className="space-y-5">
+      <SectionTitle title="Таблица лидеров" subtitle="Топ игроков по выигрышу" icon="Trophy" />
+
+      {/* Период */}
+      <div className="grid grid-cols-3 gap-2">
+        {(Object.entries(PERIOD_LABELS) as [typeof period, string][]).map(([key, label]) => (
+          <button key={key} onClick={() => setPeriod(key)}
+            className={`py-2.5 rounded-xl text-xs font-semibold transition-all
+              ${period === key ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Моя позиция */}
+      {data?.my_rank && (
+        <div className="glass rounded-2xl p-4 flex items-center justify-between border border-gold/30">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl gold-gradient flex items-center justify-center text-background font-bold text-sm glow-gold">
+              #{data.my_rank}
+            </div>
+            <div>
+              <div className="text-sm font-semibold">Твоя позиция</div>
+              <div className="text-xs text-muted-foreground">из {data.leaders.length}+ игроков</div>
+            </div>
+          </div>
+          <div className={`font-display font-bold text-lg ${(data.my_profit || 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {(data.my_profit || 0) >= 0 ? '+' : ''}{(data.my_profit || 0).toLocaleString('ru')} ₽
+          </div>
+        </div>
+      )}
+
+      {/* Список */}
+      {loading ? (
+        <div className="flex justify-center py-16 text-gold">
+          <Icon name="Loader" size={28} className="animate-spin" />
+        </div>
+      ) : !data || data.leaders.length === 0 ? (
+        <div className="glass rounded-2xl p-12 text-center">
+          <div className="text-4xl mb-3">🏆</div>
+          <p className="text-muted-foreground text-sm">Сыграй первым и возглавь рейтинг!</p>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {/* Топ-3 подиум */}
+          {data.leaders.length >= 3 && (
+            <div className="glass rounded-3xl p-5 mb-2">
+              <div className="flex items-end justify-center gap-3">
+                {/* 2 место */}
+                <div className="flex flex-col items-center gap-2 flex-1">
+                  <div className="text-2xl">🥈</div>
+                  <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center text-lg font-bold">
+                    {data.leaders[1].username.slice(0, 1).toUpperCase()}
+                  </div>
+                  <div className="text-center">
+                    <div className="text-xs font-semibold truncate max-w-[60px]">{data.leaders[1].username}</div>
+                    <div className="text-xs text-emerald-400 font-bold">+{data.leaders[1].profit.toLocaleString('ru')} ₽</div>
+                  </div>
+                  <div className="w-full h-12 bg-white/5 rounded-t-xl" />
+                </div>
+                {/* 1 место */}
+                <div className="flex flex-col items-center gap-2 flex-1">
+                  <div className="text-3xl animate-bounce">🥇</div>
+                  <div className="w-16 h-16 rounded-2xl gold-gradient flex items-center justify-center text-xl font-bold text-background glow-gold">
+                    {data.leaders[0].username.slice(0, 1).toUpperCase()}
+                  </div>
+                  <div className="text-center">
+                    <div className="text-xs font-bold gold-text truncate max-w-[70px]">{data.leaders[0].username}</div>
+                    <div className="text-sm text-emerald-400 font-display font-bold">+{data.leaders[0].profit.toLocaleString('ru')} ₽</div>
+                  </div>
+                  <div className="w-full h-20 bg-gold/10 rounded-t-xl" />
+                </div>
+                {/* 3 место */}
+                <div className="flex flex-col items-center gap-2 flex-1">
+                  <div className="text-2xl">🥉</div>
+                  <div className="w-12 h-12 rounded-2xl bg-white/10 flex items-center justify-center text-lg font-bold">
+                    {data.leaders[2].username.slice(0, 1).toUpperCase()}
+                  </div>
+                  <div className="text-center">
+                    <div className="text-xs font-semibold truncate max-w-[60px]">{data.leaders[2].username}</div>
+                    <div className="text-xs text-emerald-400 font-bold">+{data.leaders[2].profit.toLocaleString('ru')} ₽</div>
+                  </div>
+                  <div className="w-full h-8 bg-white/5 rounded-t-xl" />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Остальные */}
+          {data.leaders.slice(3).map((l) => (
+            <div key={l.rank} className="glass rounded-2xl p-3.5 flex items-center gap-3">
+              <div className="w-8 text-center text-sm font-bold text-muted-foreground">#{l.rank}</div>
+              <div className="w-9 h-9 rounded-xl bg-white/8 flex items-center justify-center text-sm font-bold shrink-0">
+                {l.username.slice(0, 1).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-semibold text-sm truncate">{l.username}</div>
+                <div className="text-xs text-muted-foreground">{l.games} игр · {l.wins} побед</div>
+              </div>
+              <div className={`font-display font-bold text-sm shrink-0 ${l.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {l.profit >= 0 ? '+' : ''}{l.profit.toLocaleString('ru')} ₽
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

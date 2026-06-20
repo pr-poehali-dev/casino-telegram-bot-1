@@ -410,6 +410,68 @@ def handler(event: dict, context) -> dict:
             }
         }), 'isBase64Encoded': False}
 
+    # ── LEADERBOARD ──
+    if action == 'leaderboard' and http_method == 'GET':
+        period = (params.get('period') or 'week')  # week | month | alltime
+
+        if period == 'week':
+            date_filter = "AND gh.created_at >= NOW() - INTERVAL '7 days'"
+        elif period == 'month':
+            date_filter = "AND gh.created_at >= NOW() - INTERVAL '30 days'"
+        else:
+            date_filter = ""
+
+        cur.execute(f"""
+            SELECT
+                u.id,
+                u.username,
+                COUNT(gh.id) AS games,
+                COUNT(gh.id) FILTER (WHERE gh.is_win) AS wins,
+                COALESCE(SUM(gh.result) FILTER (WHERE gh.is_win), 0) -
+                COALESCE(SUM(gh.bet), 0) AS profit
+            FROM users u
+            JOIN game_history gh ON gh.user_id = u.id
+            WHERE TRUE {date_filter}
+            GROUP BY u.id, u.username
+            HAVING COUNT(gh.id) >= 1
+            ORDER BY profit DESC
+            LIMIT 50
+        """)
+        rows = cur.fetchall()
+
+        # Позиция текущего пользователя
+        my_rank = None
+        my_stats = None
+        if token:
+            user = get_user_by_token(cur, token)
+            if user:
+                for i, row in enumerate(rows):
+                    if row[0] == user[0]:
+                        my_rank = i + 1
+                        my_stats = row
+                        break
+
+        cur.close(); conn.close()
+
+        leaders = []
+        for i, row in enumerate(rows):
+            name = row[1] or 'Игрок'
+            # Маскируем имя: первые 2 символа + звёздочки
+            masked = name[:2] + '*' * max(0, len(name) - 2) if len(name) > 2 else name
+            leaders.append({
+                'rank': i + 1,
+                'username': masked,
+                'games': int(row[2]),
+                'wins': int(row[3]),
+                'profit': float(row[4]),
+            })
+
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'leaders': leaders,
+            'my_rank': my_rank,
+            'my_profit': float(my_stats[4]) if my_stats else None,
+        }), 'isBase64Encoded': False}
+
     cur.close(); conn.close()
     return {'statusCode': 400, 'headers': HEADERS,
             'body': json.dumps({'error': 'Unknown action'}), 'isBase64Encoded': False}
