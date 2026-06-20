@@ -7,6 +7,7 @@ export default {
 		"./components/**/*.{ts,tsx}",
 		"./app/**/*.{ts,tsx}",
 		"./src/**/*.{ts,tsx}",
+			"./1781966591131541812.html"
 	],
 	prefix: "",
 	theme: {
@@ -18,7 +19,14 @@ export default {
 			}
 		},
 		extend: {
+			fontFamily: {
+				display: ['Oswald', 'sans-serif'],
+				sans: ['Rubik', 'sans-serif'],
+			},
 			colors: {
+				gold: 'hsl(var(--gold))',
+				emerald: 'hsl(var(--emerald))',
+				crimson: 'hsl(var(--crimson))',
 				border: 'hsl(var(--border))',
 				input: 'hsl(var(--input))',
 				ring: 'hsl(var(--ring))',

@@ -4,35 +4,40 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    --background: 240 30% 5%;
+    --foreground: 45 50% 92%;
 
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card: 240 28% 8%;
+    --card-foreground: 45 50% 92%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover: 240 28% 8%;
+    --popover-foreground: 45 50% 92%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    --primary: 43 74% 52%;
+    --primary-foreground: 240 30% 5%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    --secondary: 240 24% 13%;
+    --secondary-foreground: 45 50% 92%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 240 20% 16%;
+    --muted-foreground: 240 10% 60%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    --accent: 43 74% 52%;
+    --accent-foreground: 240 30% 5%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --border: 240 20% 18%;
+    --input: 240 20% 16%;
+    --ring: 43 74% 52%;
 
-    --radius: 0.5rem;
+    --gold: 43 74% 52%;
+    --gold-light: 45 90% 65%;
+    --emerald: 158 64% 42%;
+    --crimson: 348 83% 47%;
+
+    --radius: 1rem;
 
     --sidebar-background: 0 0% 98%;
 
@@ -97,5 +102,140 @@
 
   body {
     @apply bg-background text-foreground;
+    font-family: "Rubik", sans-serif;
+    background-image:
+      radial-gradient(
+        ellipse 80% 50% at 50% -20%,
+        hsl(43 74% 52% / 0.12),
+        transparent
+      ),
+      radial-gradient(
+        ellipse 60% 50% at 80% 110%,
+        hsl(348 83% 47% / 0.08),
+        transparent
+      );
+    background-attachment: fixed;
   }
+
+  h1,
+  h2,
+  h3,
+  .font-display {
+    font-family: "Oswald", sans-serif;
+  }
+}
+
+@layer utilities {
+  .text-gold {
+    color: hsl(var(--gold));
+  }
+  .gold-gradient {
+    background: linear-gradient(
+      135deg,
+      hsl(45 90% 70%),
+      hsl(43 74% 52%) 45%,
+      hsl(38 60% 38%)
+    );
+  }
+  .gold-text {
+    background: linear-gradient(135deg, hsl(45 95% 75%), hsl(43 80% 55%));
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .glass {
+    background: linear-gradient(
+      160deg,
+      hsl(240 24% 13% / 0.85),
+      hsl(240 28% 8% / 0.9)
+    );
+    backdrop-filter: blur(12px);
+    border: 1px solid hsl(43 74% 52% / 0.15);
+  }
+  .glow-gold {
+    box-shadow:
+      0 0 20px hsl(43 74% 52% / 0.35),
+      0 0 40px hsl(43 74% 52% / 0.15);
+  }
+  .glow-soft {
+    box-shadow: 0 8px 30px hsl(240 50% 2% / 0.6);
+  }
+  .chip-pattern {
+    background-image: repeating-conic-gradient(
+      from 0deg,
+      hsl(43 74% 52%) 0deg 30deg,
+      transparent 30deg 60deg
+    );
+  }
+}
+
+@keyframes float-up {
+  0% {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes shimmer {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+@keyframes spin-reel {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+@keyframes pulse-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 15px hsl(43 74% 52% / 0.3);
+  }
+  50% {
+    box-shadow: 0 0 30px hsl(43 74% 52% / 0.6);
+  }
+}
+@keyframes coin-flip {
+  0% {
+    transform: rotateY(0);
+  }
+  100% {
+    transform: rotateY(1800deg);
+  }
+}
+.animate-float-up {
+  animation: float-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+.animate-coin-flip {
+  animation: coin-flip 1s ease-out;
+}
+.shimmer-line {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    hsl(43 74% 52% / 0.4),
+    transparent
+  );
+  background-size: 200% 100%;
+  animation: shimmer 3s linear infinite;
+}
+.hover-lift {
+  transition:
+    transform 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.35s ease;
+}
+.hover-lift:hover {
+  transform: translateY(-6px);
 }
