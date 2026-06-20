@@ -114,7 +114,7 @@ def handler(event: dict, context) -> dict:
         UPDATE orders
         SET status = 'paid', paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
         WHERE robokassa_inv_id = %s AND status = 'pending'
-        RETURNING id, order_number, user_email, user_name, amount
+        RETURNING id, order_number, user_email, user_name, amount, order_comment
     """, (int(inv_id),))
 
     result = cur.fetchone()
@@ -131,7 +131,15 @@ def handler(event: dict, context) -> dict:
     cur.close()
     conn.close()
 
-    order_id, order_number, user_email, user_name, amount = result
+    order_id, order_number, user_email, user_name, amount, order_comment = result
+
+    # Парсим Telegram username из order_comment: "... | tg:username"
+    player_tg_username = None
+    if order_comment and '| tg:' in order_comment:
+        try:
+            player_tg_username = order_comment.split('| tg:')[1].strip().split()[0]
+        except Exception:
+            pass
     amount_str = f"{float(amount):,.0f}".replace(',', ' ')
 
     # ── Уведомление владельцу в Telegram ──
@@ -146,8 +154,18 @@ def handler(event: dict, context) -> dict:
         )
         send_telegram(owner_chat_id, tg_owner)
 
-    # ── Уведомление игроку в Telegram (если есть user_phone как chat_id — пропускаем) ──
-    # Email игроку
+    # ── Уведомление игроку в Telegram ──
+    if player_tg_username:
+        tg_player = (
+            f"✅ <b>Баланс пополнен!</b>\n\n"
+            f"Привет, {user_name or 'игрок'}!\n"
+            f"Твой баланс успешно пополнен на <b>{amount_str} ₽</b>.\n\n"
+            f"🧾 Заказ: {order_number}\n"
+            f"🎰 Удачи в игре!"
+        )
+        send_telegram(f"@{player_tg_username}", tg_player)
+
+    # ── Email игроку ──
     if user_email:
         email_html = f"""
         <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;background:#1a1a2e;color:#fff;border-radius:16px;overflow:hidden;">

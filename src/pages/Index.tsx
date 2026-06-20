@@ -302,6 +302,7 @@ function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string)
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [userPhone, setUserPhone] = useState('');
+  const [userTelegram, setUserTelegram] = useState('');
   const [paidAmount, setPaidAmount] = useState(0);
   const [orderNumber, setOrderNumber] = useState('');
   const sessionIdRef = useRef('');
@@ -370,7 +371,7 @@ function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string)
         cartItems: [{ id: 'deposit', name: `Пополнение баланса (${method.name})`, price: finalAmount, quantity: 1 }],
         successUrl: window.location.href,
         failUrl: window.location.href,
-        orderComment: `Пополнение через ${method.name}`,
+        orderComment: `Пополнение через ${method.name}${userTelegram ? ` | tg:${userTelegram.replace('@', '')}` : ''}`,
       });
       openPaymentPage(result.payment_url);
       // Через 3 сек запускаем поллинг (пользователь ушёл на оплату)
@@ -386,7 +387,7 @@ function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string)
     setMethod(null);
     setCustomAmount('');
     setAmount(1000);
-    setUserName(''); setUserEmail(''); setUserPhone('');
+    setUserName(''); setUserEmail(''); setUserPhone(''); setUserTelegram('');
     sessionIdRef.current = '';
   };
 
@@ -586,6 +587,21 @@ function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string)
             <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Телефон (необязательно)</label>
             <input className={inputCls} placeholder="+7 999 000-00-00" value={userPhone}
               onChange={e => setUserPhone(e.target.value)} inputMode="tel" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">
+              Telegram (необязательно)
+            </label>
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground/60 text-sm">@</span>
+              <input
+                className={inputCls + ' pl-8'}
+                placeholder="username"
+                value={userTelegram}
+                onChange={e => setUserTelegram(e.target.value.replace('@', ''))}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground/50 mt-1">Получишь подтверждение об оплате в Telegram</p>
           </div>
         </div>
 
