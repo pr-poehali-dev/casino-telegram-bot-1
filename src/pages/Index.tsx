@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
+import { useRobokassa, openPaymentPage } from '@/components/extensions/robokassa/useRobokassa';
 import Icon from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
@@ -288,278 +289,81 @@ const DEPOSIT_METHODS = [
   },
 ];
 
-type DepositStep = 'method' | 'amount' | 'card-form' | 'sbp-form' | 'ymoney-form' | 'crypto-form' | 'success';
+const ROBOKASSA_API = 'https://functions.poehali.dev/ed14271a-993b-4abb-a021-fd5ba53c863d';
+
+type DepositStep = 'method' | 'amount' | 'user-info' | 'crypto-form' | 'redirecting';
 
 function DepositView({ notify: _notify }: { notify: (m: string) => void }) {
   const [step, setStep] = useState<DepositStep>('method');
   const [method, setMethod] = useState<typeof DEPOSIT_METHODS[0] | null>(null);
   const [amount, setAmount] = useState(1000);
   const [customAmount, setCustomAmount] = useState('');
-  const [cardNum, setCardNum] = useState('');
-  const [cardExp, setCardExp] = useState('');
-  const [cardCvv, setCardCvv] = useState('');
-  const [cardName, setCardName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [walletId, setWalletId] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [userName, setUserName] = useState('');
+  const [userEmail, setUserEmail] = useState('');
+  const [userPhone, setUserPhone] = useState('');
 
   const finalAmount = customAmount ? parseInt(customAmount) || 0 : amount;
 
-  const formatCard = (v: string) =>
-    v.replace(/\D/g, '').slice(0, 16).replace(/(.{4})/g, '$1 ').trim();
+  const { createPayment, isLoading } = useRobokassa({
+    apiUrl: ROBOKASSA_API,
+    onError: (err) => toast.error('Ошибка создания платежа: ' + err.message),
+  });
 
-  const formatExp = (v: string) => {
-    const digits = v.replace(/\D/g, '').slice(0, 4);
-    return digits.length >= 3 ? digits.slice(0, 2) + '/' + digits.slice(2) : digits;
-  };
-
-  const formatPhone = (v: string) => {
-    const digits = v.replace(/\D/g, '').slice(0, 11);
-    if (digits.length === 0) return '';
-    let res = '+7';
-    if (digits.length > 1) res += ' (' + digits.slice(1, 4);
-    if (digits.length > 4) res += ') ' + digits.slice(4, 7);
-    if (digits.length > 7) res += '-' + digits.slice(7, 9);
-    if (digits.length > 9) res += '-' + digits.slice(9, 11);
-    return res;
-  };
-
-  const handlePay = () => {
-    setLoading(true);
-    setTimeout(() => {
-      setLoading(false);
-      setStep('success');
-    }, 2000);
-  };
+  const handlePay = useCallback(async () => {
+    if (!method) return;
+    try {
+      setStep('redirecting');
+      const result = await createPayment({
+        amount: finalAmount,
+        userName: userName || 'Игрок',
+        userEmail,
+        userPhone,
+        cartItems: [{ id: 'deposit', name: `Пополнение баланса (${method.name})`, price: finalAmount, quantity: 1 }],
+        successUrl: window.location.href,
+        failUrl: window.location.href,
+        orderComment: `Пополнение через ${method.name}`,
+      });
+      openPaymentPage(result.payment_url);
+    } catch {
+      setStep('user-info');
+    }
+  }, [method, finalAmount, userName, userEmail, userPhone, createPayment]);
 
   const reset = () => {
     setStep('method');
     setMethod(null);
-    setCardNum(''); setCardExp(''); setCardCvv(''); setCardName('');
-    setPhone(''); setWalletId(''); setCustomAmount('');
+    setCustomAmount('');
     setAmount(1000);
+    setUserName(''); setUserEmail(''); setUserPhone('');
   };
 
   const inputCls = 'w-full bg-background/60 border border-gold/20 rounded-xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-foreground placeholder:text-muted-foreground/50';
 
-  // ── SUCCESS ──
-  if (step === 'success') {
+  // ── REDIRECTING ──
+  if (step === 'redirecting') {
     return (
       <div className="space-y-5">
-        <SectionTitle title="Пополнение" subtitle="Пополни баланс мгновенно" icon="ArrowDownToLine" />
-        <div className="animate-win-pop glass rounded-3xl p-8 flex flex-col items-center gap-4 text-center glow-soft">
-          <div className="w-20 h-20 rounded-full gold-gradient flex items-center justify-center glow-gold">
-            <Icon name="Check" size={36} className="text-background" />
+        <SectionTitle title="Пополнение" subtitle="Переходим к оплате" icon="ArrowDownToLine" />
+        <div className="glass rounded-3xl p-10 flex flex-col items-center gap-5 text-center glow-soft">
+          <div className="w-20 h-20 rounded-full gold-gradient flex items-center justify-center glow-gold animate-pulse">
+            <Icon name="ExternalLink" size={32} className="text-background" />
           </div>
           <div>
-            <h3 className="font-display text-2xl font-bold gold-text">Заявка принята!</h3>
-            <p className="text-muted-foreground text-sm mt-1">Сумма {finalAmount.toLocaleString('ru')} ₽ будет зачислена после подтверждения</p>
+            <h3 className="font-display text-xl font-bold gold-text">Открываем страницу оплаты</h3>
+            <p className="text-muted-foreground text-sm mt-1">Сейчас вы будете перенаправлены на Robokassa</p>
           </div>
-          <div className="w-full glass rounded-2xl p-4 space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Метод</span>
-              <span className="font-medium">{method?.name}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Сумма</span>
-              <span className="font-display font-bold gold-text">{finalAmount.toLocaleString('ru')} ₽</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Статус</span>
-              <span className="text-emerald-400 font-medium flex items-center gap-1">
-                <Icon name="Clock" size={13} /> Обработка
-              </span>
-            </div>
+          <div className="flex items-center gap-2 text-gold text-sm">
+            <Icon name="Loader" size={16} className="animate-spin" /> Создаём заказ...
           </div>
-          <Button onClick={reset} className="w-full gold-gradient text-background font-bold h-12 glow-gold">
-            <Icon name="Plus" size={18} className="mr-2" /> Ещё пополнение
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  // ── CARD FORM ──
-  if (step === 'card-form') {
-    const valid = cardNum.replace(/\s/g, '').length === 16 && cardExp.length === 5 && cardCvv.length === 3 && cardName.length >= 3;
-    return (
-      <div className="space-y-5">
-        <div className="flex items-center gap-3 animate-float-up">
-          <button onClick={() => setStep('amount')} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
-            <Icon name="ArrowLeft" size={20} />
+          <button onClick={reset} className="text-xs text-muted-foreground underline underline-offset-2">
+            Отменить
           </button>
-          <div>
-            <h2 className="font-display text-xl font-bold">Банковская карта</h2>
-            <p className="text-sm text-muted-foreground">{finalAmount.toLocaleString('ru')} ₽</p>
-          </div>
         </div>
-
-        {/* Card preview */}
-        <div className="animate-float-up relative rounded-2xl overflow-hidden p-5" style={{ animationDelay: '60ms', background: 'linear-gradient(135deg, hsl(240 30% 18%), hsl(240 20% 12%))', border: '1px solid hsl(43 74% 52% / 0.25)' }}>
-          <div className="absolute top-3 right-3 opacity-20">
-            <Icon name="CreditCard" size={48} className="text-gold" />
-          </div>
-          <div className="text-xs text-muted-foreground mb-4 uppercase tracking-wider">Банковская карта</div>
-          <div className="font-display text-xl font-bold tracking-widest text-white/90 mb-4">
-            {(cardNum || '•••• •••• •••• ••••')}
-          </div>
-          <div className="flex justify-between text-sm">
-            <div>
-              <div className="text-[10px] text-muted-foreground uppercase">Держатель</div>
-              <div className="font-medium text-white/80">{cardName || 'IVAN IVANOV'}</div>
-            </div>
-            <div>
-              <div className="text-[10px] text-muted-foreground uppercase">Срок</div>
-              <div className="font-medium text-white/80">{cardExp || 'MM/YY'}</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="animate-float-up space-y-3" style={{ animationDelay: '100ms' }}>
-          <div>
-            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Номер карты</label>
-            <input className={inputCls} placeholder="0000 0000 0000 0000" value={cardNum}
-              onChange={e => setCardNum(formatCard(e.target.value))} inputMode="numeric" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Срок</label>
-              <input className={inputCls} placeholder="MM/YY" value={cardExp}
-                onChange={e => setCardExp(formatExp(e.target.value))} inputMode="numeric" />
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">CVV</label>
-              <input className={inputCls} placeholder="•••" type="password" maxLength={3} value={cardCvv}
-                onChange={e => setCardCvv(e.target.value.replace(/\D/g, '').slice(0, 3))} inputMode="numeric" />
-            </div>
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Имя на карте</label>
-            <input className={inputCls} placeholder="IVAN IVANOV" value={cardName}
-              onChange={e => setCardName(e.target.value.toUpperCase())} />
-          </div>
-        </div>
-
-        <div className="animate-float-up glass rounded-xl p-3 flex items-center gap-2 text-xs text-muted-foreground" style={{ animationDelay: '140ms' }}>
-          <Icon name="Lock" size={14} className="text-gold shrink-0" />
-          Данные защищены шифрованием SSL. Карта не сохраняется.
-        </div>
-
-        <Button onClick={handlePay} disabled={!valid || loading}
-          className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
-          {loading
-            ? <><Icon name="Loader" size={20} className="mr-2 animate-spin" /> Обработка...</>
-            : <><Icon name="Lock" size={20} className="mr-2" /> Оплатить {finalAmount.toLocaleString('ru')} ₽</>}
-        </Button>
       </div>
     );
   }
 
-  // ── SBP FORM ──
-  if (step === 'sbp-form') {
-    const valid = phone.replace(/\D/g, '').length === 11;
-    return (
-      <div className="space-y-5">
-        <div className="flex items-center gap-3 animate-float-up">
-          <button onClick={() => setStep('amount')} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
-            <Icon name="ArrowLeft" size={20} />
-          </button>
-          <div>
-            <h2 className="font-display text-xl font-bold">СБП</h2>
-            <p className="text-sm text-muted-foreground">{finalAmount.toLocaleString('ru')} ₽</p>
-          </div>
-        </div>
-
-        <div className="animate-float-up glass rounded-2xl p-5 flex flex-col items-center gap-3 text-center" style={{ animationDelay: '60ms' }}>
-          <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-4xl" style={{ background: 'linear-gradient(135deg, #1a2f6e, #7b2fbe)' }}>
-            ⚡
-          </div>
-          <div>
-            <div className="font-display font-bold text-lg">Система быстрых платежей</div>
-            <div className="text-sm text-muted-foreground">Перевод по номеру телефона через СБП</div>
-          </div>
-        </div>
-
-        <div className="animate-float-up space-y-3" style={{ animationDelay: '100ms' }}>
-          <div>
-            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Номер телефона</label>
-            <input className={inputCls} placeholder="+7 (999) 000-00-00" value={phone}
-              onChange={e => setPhone(formatPhone(e.target.value))} inputMode="tel" />
-          </div>
-          <div className="glass rounded-xl p-4 space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Сумма перевода</span>
-              <span className="font-display font-bold gold-text">{finalAmount.toLocaleString('ru')} ₽</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Комиссия</span>
-              <span className="text-emerald-400 font-medium">0 ₽</span>
-            </div>
-            <div className="w-full h-px bg-gold/10" />
-            <div className="flex justify-between font-bold">
-              <span>Итого</span>
-              <span className="gold-text">{finalAmount.toLocaleString('ru')} ₽</span>
-            </div>
-          </div>
-        </div>
-
-        <Button onClick={handlePay} disabled={!valid || loading}
-          className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
-          {loading
-            ? <><Icon name="Loader" size={20} className="mr-2 animate-spin" /> Обработка...</>
-            : <><Icon name="Zap" size={20} className="mr-2" /> Перевести {finalAmount.toLocaleString('ru')} ₽</>}
-        </Button>
-      </div>
-    );
-  }
-
-  // ── YMONEY FORM ──
-  if (step === 'ymoney-form') {
-    const valid = walletId.replace(/\D/g, '').length >= 10;
-    return (
-      <div className="space-y-5">
-        <div className="flex items-center gap-3 animate-float-up">
-          <button onClick={() => setStep('amount')} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
-            <Icon name="ArrowLeft" size={20} />
-          </button>
-          <div>
-            <h2 className="font-display text-xl font-bold">ЮMoney</h2>
-            <p className="text-sm text-muted-foreground">{finalAmount.toLocaleString('ru')} ₽</p>
-          </div>
-        </div>
-
-        <div className="animate-float-up space-y-3" style={{ animationDelay: '60ms' }}>
-          <div className="glass rounded-2xl p-5 flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-3xl shrink-0" style={{ background: 'linear-gradient(135deg, #8b00ff, #5500cc)' }}>
-              💜
-            </div>
-            <div>
-              <div className="font-bold">ЮMoney кошелёк</div>
-              <div className="text-sm text-muted-foreground">Введи номер кошелька</div>
-            </div>
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Номер кошелька</label>
-            <input className={inputCls} placeholder="4100 1234 5678 90" value={walletId}
-              onChange={e => setWalletId(e.target.value.replace(/\D/g, '').slice(0, 16))} inputMode="numeric" />
-          </div>
-          <div className="glass rounded-xl p-4 text-sm flex justify-between">
-            <span className="text-muted-foreground">К оплате</span>
-            <span className="font-display font-bold gold-text">{finalAmount.toLocaleString('ru')} ₽</span>
-          </div>
-        </div>
-
-        <Button onClick={handlePay} disabled={!valid || loading}
-          className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
-          {loading
-            ? <><Icon name="Loader" size={20} className="mr-2 animate-spin" /> Обработка...</>
-            : <><Icon name="Wallet" size={20} className="mr-2" /> Пополнить {finalAmount.toLocaleString('ru')} ₽</>}
-        </Button>
-      </div>
-    );
-  }
-
-  // ── CRYPTO FORM ──
+  // ── CRYPTO FORM (без шлюза, ручной) ──
   if (step === 'crypto-form') {
     const WALLET_ADDR = 'TRx9dK2mQpLvXcYh8NbwAeR5sJfU3gZqP';
     return (
@@ -573,9 +377,7 @@ function DepositView({ notify: _notify }: { notify: (m: string) => void }) {
             <p className="text-sm text-muted-foreground">≈ {(finalAmount / 90).toFixed(2)} USDT</p>
           </div>
         </div>
-
         <div className="animate-float-up glass rounded-2xl p-5 flex flex-col items-center gap-4 text-center" style={{ animationDelay: '60ms' }}>
-          {/* QR placeholder */}
           <div className="w-40 h-40 rounded-2xl flex items-center justify-center" style={{ background: 'white' }}>
             <div className="grid grid-cols-5 grid-rows-5 gap-1 w-32 h-32 p-2">
               {Array.from({ length: 25 }).map((_, i) => (
@@ -588,39 +390,82 @@ function DepositView({ notify: _notify }: { notify: (m: string) => void }) {
             <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Адрес кошелька TRC-20</div>
             <div className="font-mono text-xs break-all text-foreground/80 bg-background/50 rounded-lg px-3 py-2">{WALLET_ADDR}</div>
           </div>
-          <button
-            onClick={() => { navigator.clipboard.writeText(WALLET_ADDR); toast('Адрес скопирован'); }}
-            className="flex items-center gap-2 glass rounded-xl px-4 py-2 text-sm font-medium text-gold"
-          >
+          <button onClick={() => { navigator.clipboard.writeText(WALLET_ADDR); toast('Адрес скопирован'); }}
+            className="flex items-center gap-2 glass rounded-xl px-4 py-2 text-sm font-medium text-gold">
             <Icon name="Copy" size={16} /> Скопировать адрес
           </button>
         </div>
-
         <div className="animate-float-up glass rounded-xl p-4 space-y-2 text-sm" style={{ animationDelay: '100ms' }}>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Сумма в USDT</span>
-            <span className="font-bold gold-text">{(finalAmount / 90).toFixed(2)} USDT</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Сеть</span>
-            <span className="font-medium">TRC-20 (TRON)</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Зачисление</span>
-            <span className="text-amber-400">3–10 минут</span>
-          </div>
+          <div className="flex justify-between"><span className="text-muted-foreground">USDT</span><span className="font-bold gold-text">{(finalAmount / 90).toFixed(2)}</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Сеть</span><span>TRC-20</span></div>
+          <div className="flex justify-between"><span className="text-muted-foreground">Зачисление</span><span className="text-amber-400">3–10 мин</span></div>
         </div>
-
-        <div className="animate-float-up glass rounded-xl p-3 flex items-start gap-2 text-xs text-muted-foreground" style={{ animationDelay: '120ms' }}>
+        <div className="glass rounded-xl p-3 flex items-start gap-2 text-xs text-muted-foreground">
           <Icon name="AlertTriangle" size={14} className="text-amber-400 shrink-0 mt-0.5" />
-          Отправляй только USDT на сеть TRC-20. Другие монеты и сети не поддерживаются.
+          Только USDT TRC-20. Другие сети не поддерживаются.
+        </div>
+        <Button onClick={reset} className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold">
+          <Icon name="Check" size={20} className="mr-2" /> Я отправил USDT
+        </Button>
+      </div>
+    );
+  }
+
+  // ── USER INFO (email обязателен для Robokassa) ──
+  if (step === 'user-info' && method) {
+    const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(userEmail);
+    return (
+      <div className="space-y-5">
+        <div className="flex items-center gap-3 animate-float-up">
+          <button onClick={() => setStep('amount')} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
+            <Icon name="ArrowLeft" size={20} />
+          </button>
+          <div>
+            <h2 className="font-display text-xl font-bold">{method.name}</h2>
+            <p className="text-sm text-muted-foreground">{finalAmount.toLocaleString('ru')} ₽</p>
+          </div>
         </div>
 
-        <Button onClick={handlePay} disabled={loading}
+        <div className="animate-float-up glass rounded-2xl p-4 flex items-center gap-3" style={{ animationDelay: '40ms' }}>
+          <div className="w-10 h-10 rounded-xl bg-gold/10 flex items-center justify-center text-gold shrink-0">
+            <Icon name={method.icon} size={20} />
+          </div>
+          <div className="text-sm">
+            <div className="font-semibold">{method.name}</div>
+            <div className="text-muted-foreground">Оплата через Robokassa</div>
+          </div>
+          <div className="ml-auto font-display font-bold gold-text tabular-nums">{finalAmount.toLocaleString('ru')} ₽</div>
+        </div>
+
+        <div className="animate-float-up space-y-3" style={{ animationDelay: '80ms' }}>
+          <p className="text-xs text-muted-foreground">Robokassa требует email для отправки чека</p>
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Email <span className="text-red-400">*</span></label>
+            <input className={inputCls} placeholder="your@email.com" value={userEmail}
+              onChange={e => setUserEmail(e.target.value)} type="email" inputMode="email" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Имя (необязательно)</label>
+            <input className={inputCls} placeholder="Иван Иванов" value={userName}
+              onChange={e => setUserName(e.target.value)} />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Телефон (необязательно)</label>
+            <input className={inputCls} placeholder="+7 999 000-00-00" value={userPhone}
+              onChange={e => setUserPhone(e.target.value)} inputMode="tel" />
+          </div>
+        </div>
+
+        <div className="animate-float-up glass rounded-xl p-3 flex items-center gap-2 text-xs text-muted-foreground" style={{ animationDelay: '120ms' }}>
+          <Icon name="ShieldCheck" size={14} className="text-gold shrink-0" />
+          Платёж обрабатывает Robokassa. Карта вводится на их защищённой странице.
+        </div>
+
+        <Button onClick={handlePay} disabled={!emailValid || isLoading}
           className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
-          {loading
-            ? <><Icon name="Loader" size={20} className="mr-2 animate-spin" /> Проверяю платёж...</>
-            : <><Icon name="Check" size={20} className="mr-2" /> Я отправил USDT</>}
+          {isLoading
+            ? <><Icon name="Loader" size={20} className="mr-2 animate-spin" /> Создаём заказ...</>
+            : <><Icon name="ExternalLink" size={20} className="mr-2" /> Перейти к оплате</>}
         </Button>
       </div>
     );
@@ -629,10 +474,8 @@ function DepositView({ notify: _notify }: { notify: (m: string) => void }) {
   // ── AMOUNT STEP ──
   if (step === 'amount' && method) {
     const nextStep = () => {
-      if (method.id === 'card') setStep('card-form');
-      else if (method.id === 'sbp') setStep('sbp-form');
-      else if (method.id === 'ymoney') setStep('ymoney-form');
-      else setStep('crypto-form');
+      if (method.id === 'crypto') setStep('crypto-form');
+      else setStep('user-info');
     };
     const valid = finalAmount >= method.min;
     return (
