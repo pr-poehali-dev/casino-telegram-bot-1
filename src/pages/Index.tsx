@@ -9,7 +9,7 @@ import DiceGame from '@/components/DiceGame';
 import RouletteGame from '@/components/RouletteGame';
 import BlackjackGame from '@/components/BlackjackGame';
 
-type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support';
+type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin';
 
 const GAMES = [
   { id: 'roulette', name: 'Рулетка', icon: 'CircleDot', desc: 'Красное или чёрное', accent: 'crimson', emoji: '🎡' },
@@ -111,6 +111,7 @@ export default function Index() {
               {section === 'stats' && <StatsView />}
               {section === 'profile' && <ProfileView setSection={setSection} notify={notify} />}
               {section === 'support' && <SupportView notify={notify} />}
+              {section === 'admin' && <AdminView />}
             </>
           )}
         </main>
@@ -1119,6 +1120,21 @@ function StatsView() {
 }
 
 function ProfileView({ setSection, notify }: { setSection: (s: Section) => void; notify: (m: string) => void }) {
+  const [tapCount, setTapCount] = useState(0);
+  const tapTimer = useRef<number | null>(null);
+
+  const handleSecretTap = () => {
+    const next = tapCount + 1;
+    setTapCount(next);
+    if (tapTimer.current) clearTimeout(tapTimer.current);
+    if (next >= 5) {
+      setTapCount(0);
+      setSection('admin');
+      return;
+    }
+    tapTimer.current = window.setTimeout(() => setTapCount(0), 1500);
+  };
+
   const items = [
     { name: 'Пополнить баланс', icon: 'Wallet', action: () => setSection('deposit') },
     { name: 'Вывод средств', icon: 'ArrowUpFromLine', action: () => setSection('withdraw') },
@@ -1131,7 +1147,8 @@ function ProfileView({ setSection, notify }: { setSection: (s: Section) => void;
       <div className="animate-float-up glass rounded-3xl p-6 text-center relative overflow-hidden glow-soft">
         <div className="absolute inset-x-0 top-0 h-24 gold-gradient opacity-20" />
         <div className="relative">
-          <div className="w-20 h-20 rounded-2xl gold-gradient mx-auto flex items-center justify-center glow-gold mb-3">
+          <div className="w-20 h-20 rounded-2xl gold-gradient mx-auto flex items-center justify-center glow-gold mb-3 cursor-pointer select-none"
+            onClick={handleSecretTap}>
             <Icon name="User" size={36} className="text-background" />
           </div>
           <h2 className="font-display text-xl font-bold">Александр</h2>
@@ -1199,6 +1216,249 @@ function SectionTitle({ title, subtitle, icon }: { title: string; subtitle: stri
         <h2 className="font-display text-2xl font-bold tracking-wide leading-none">{title}</h2>
         <p className="text-sm text-muted-foreground">{subtitle}</p>
       </div>
+    </div>
+  );
+}
+
+const ADMIN_API = 'https://functions.poehali.dev/fc579833-522a-4863-abbc-24eece05648f';
+
+const STATUS_META: Record<string, { label: string; color: string }> = {
+  pending:    { label: 'На рассмотрении', color: 'text-amber-400' },
+  processing: { label: 'В обработке',     color: 'text-blue-400'  },
+  paid:       { label: 'Выплачено',        color: 'text-emerald-400' },
+  rejected:   { label: 'Отклонено',        color: 'text-red-400'   },
+};
+
+interface Withdrawal {
+  id: number;
+  request_number: string;
+  user_name: string;
+  user_email: string;
+  user_telegram: string;
+  method: string;
+  destination: string;
+  amount: number;
+  status: string;
+  created_at: string;
+}
+
+function AdminView() {
+  const [password, setPassword] = useState('');
+  const [authed, setAuthed] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState('');
+  const [updating, setUpdating] = useState<number | null>(null);
+  const [selected, setSelected] = useState<Withdrawal | null>(null);
+  const passwordRef = useRef('');
+
+  const fetchWithdrawals = useCallback(async (pwd: string, statusFilter = '') => {
+    setLoading(true);
+    try {
+      const url = statusFilter ? `${ADMIN_API}?status=${statusFilter}` : ADMIN_API;
+      const res = await fetch(url, { headers: { 'X-Admin-Password': pwd } });
+      if (res.status === 401) { setAuthed(false); return; }
+      const data = await res.json();
+      setWithdrawals(data.withdrawals || []);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const handleLogin = async () => {
+    setAuthError('');
+    setLoading(true);
+    try {
+      const res = await fetch(ADMIN_API, { headers: { 'X-Admin-Password': password } });
+      if (res.status === 401) { setAuthError('Неверный пароль'); return; }
+      const data = await res.json();
+      passwordRef.current = password;
+      setWithdrawals(data.withdrawals || []);
+      setAuthed(true);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateStatus = async (id: number, status: string) => {
+    setUpdating(id);
+    try {
+      const res = await fetch(ADMIN_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Password': passwordRef.current },
+        body: JSON.stringify({ withdrawal_id: id, status }),
+      });
+      if (res.ok) {
+        setWithdrawals(prev => prev.map(w => w.id === id ? { ...w, status } : w));
+        if (selected?.id === id) setSelected(prev => prev ? { ...prev, status } : null);
+        toast.success('Статус обновлён');
+      }
+    } finally {
+      setUpdating(null);
+    }
+  };
+
+  const applyFilter = (f: string) => {
+    setFilter(f);
+    fetchWithdrawals(passwordRef.current, f);
+  };
+
+  const inputCls = 'w-full bg-background/60 border border-gold/20 rounded-xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-foreground placeholder:text-muted-foreground/50';
+
+  // ── LOGIN ──
+  if (!authed) {
+    return (
+      <div className="space-y-5">
+        <SectionTitle title="Администратор" subtitle="Панель управления" icon="ShieldCheck" />
+        <div className="glass rounded-3xl p-8 flex flex-col gap-5">
+          <div className="flex flex-col items-center gap-2 text-center">
+            <div className="w-16 h-16 rounded-2xl gold-gradient flex items-center justify-center glow-gold">
+              <Icon name="Lock" size={28} className="text-background" />
+            </div>
+            <p className="text-sm text-muted-foreground">Введи пароль администратора</p>
+          </div>
+          <input
+            className={inputCls}
+            type="password"
+            placeholder="Пароль"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleLogin()}
+          />
+          {authError && (
+            <div className="flex items-center gap-2 text-sm text-red-400">
+              <Icon name="AlertCircle" size={14} /> {authError}
+            </div>
+          )}
+          <Button onClick={handleLogin} disabled={loading || !password}
+            className="w-full gold-gradient text-background font-bold h-12 glow-gold disabled:opacity-50">
+            {loading ? <><Icon name="Loader" size={18} className="mr-2 animate-spin" /> Вход...</> : 'Войти'}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── DETAIL ──
+  if (selected) {
+    const meta = STATUS_META[selected.status] || { label: selected.status, color: 'text-foreground' };
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-3">
+          <button onClick={() => setSelected(null)} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
+            <Icon name="ArrowLeft" size={20} />
+          </button>
+          <div>
+            <h2 className="font-display text-xl font-bold">Заявка</h2>
+            <p className="text-xs font-mono text-muted-foreground">{selected.request_number}</p>
+          </div>
+        </div>
+
+        <div className="glass rounded-2xl p-5 space-y-3 text-sm">
+          {[
+            { label: 'Игрок', value: selected.user_name || '—' },
+            { label: 'Email', value: selected.user_email || '—' },
+            { label: 'Telegram', value: selected.user_telegram ? `@${selected.user_telegram}` : '—' },
+            { label: 'Метод', value: selected.method },
+            { label: 'Реквизиты', value: selected.destination },
+            { label: 'Сумма', value: `${selected.amount.toLocaleString('ru')} ₽`, bold: true },
+            { label: 'Дата', value: new Date(selected.created_at).toLocaleString('ru') },
+          ].map(row => (
+            <div key={row.label} className="flex justify-between gap-4 py-1 border-b border-gold/5 last:border-0">
+              <span className="text-muted-foreground shrink-0">{row.label}</span>
+              <span className={`text-right break-all ${row.bold ? 'font-display font-bold gold-text' : ''}`}>{row.value}</span>
+            </div>
+          ))}
+          <div className="flex justify-between py-1">
+            <span className="text-muted-foreground">Статус</span>
+            <span className={`font-semibold ${meta.color}`}>{meta.label}</span>
+          </div>
+        </div>
+
+        <div className="glass rounded-2xl p-4 space-y-2">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider mb-3">Сменить статус</p>
+          <div className="grid grid-cols-2 gap-2">
+            {Object.entries(STATUS_META).map(([key, { label, color }]) => (
+              <button
+                key={key}
+                disabled={selected.status === key || updating === selected.id}
+                onClick={() => updateStatus(selected.id, key)}
+                className={`py-2.5 px-3 rounded-xl text-sm font-semibold border transition-all disabled:opacity-40
+                  ${selected.status === key ? 'border-gold/40 gold-gradient text-background' : 'border-gold/10 glass hover:border-gold/30'}`}
+              >
+                {updating === selected.id ? <Icon name="Loader" size={14} className="animate-spin mx-auto" /> : <span className={selected.status === key ? '' : color}>{label}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── LIST ──
+  const counts = withdrawals.reduce((acc, w) => {
+    acc[w.status] = (acc[w.status] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <SectionTitle title="Выводы" subtitle={`${withdrawals.length} заявок`} icon="ShieldCheck" />
+        <button onClick={() => fetchWithdrawals(passwordRef.current, filter)}
+          className="w-9 h-9 glass rounded-xl flex items-center justify-center text-gold">
+          <Icon name="RefreshCw" size={16} />
+        </button>
+      </div>
+
+      {/* Фильтр */}
+      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+        {[{ key: '', label: 'Все' }, ...Object.entries(STATUS_META).map(([k, v]) => ({ key: k, label: v.label }))].map(f => (
+          <button key={f.key} onClick={() => applyFilter(f.key)}
+            className={`shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all
+              ${filter === f.key ? 'gold-gradient text-background' : 'glass text-muted-foreground'}`}>
+            {f.label}{f.key && counts[f.key] ? ` (${counts[f.key]})` : ''}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-12 text-gold">
+          <Icon name="Loader" size={28} className="animate-spin" />
+        </div>
+      ) : withdrawals.length === 0 ? (
+        <div className="glass rounded-2xl p-10 text-center text-muted-foreground text-sm">
+          Заявок нет
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {withdrawals.map(w => {
+            const meta = STATUS_META[w.status] || { label: w.status, color: 'text-foreground' };
+            return (
+              <button key={w.id} onClick={() => setSelected(w)}
+                className="w-full glass rounded-2xl p-4 flex items-center gap-3 hover:border-gold/20 border border-transparent transition-all text-left">
+                <div className="w-10 h-10 rounded-xl bg-gold/10 flex items-center justify-center shrink-0">
+                  <Icon name="ArrowUpFromLine" size={18} className="text-gold" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-center gap-2">
+                    <span className="font-display font-bold gold-text">{w.amount.toLocaleString('ru')} ₽</span>
+                    <span className={`text-xs font-semibold ${meta.color}`}>{meta.label}</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground truncate mt-0.5">
+                    {w.user_name || w.user_email || '—'} · {w.method}
+                  </div>
+                  <div className="text-xs text-muted-foreground/50 mt-0.5">
+                    {new Date(w.created_at).toLocaleString('ru')}
+                  </div>
+                </div>
+                <Icon name="ChevronRight" size={16} className="text-muted-foreground shrink-0" />
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

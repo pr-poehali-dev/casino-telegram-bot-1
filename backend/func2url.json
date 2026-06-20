@@ -1,4 +1,5 @@
 {
+  "admin-withdrawals": "https://functions.poehali.dev/fc579833-522a-4863-abbc-24eece05648f",
   "withdraw-request": "https://functions.poehali.dev/5264284f-4bd1-4c29-9530-a9fd03734d4d",
   "order-status": "https://functions.poehali.dev/c33b0e83-4616-4a6e-a9fd-18de4f0b2b09",
   "robokassa-robokassa-webhook": "https://functions.poehali.dev/1dca41ce-8c98-41b7-a696-6c81b877f905",
