@@ -1242,25 +1242,47 @@ interface Withdrawal {
   created_at: string;
 }
 
+interface Order {
+  id: number;
+  order_number: string;
+  user_name: string;
+  user_email: string;
+  order_comment: string;
+  amount: number;
+  status: string;
+  created_at: string;
+  paid_at: string;
+}
+
+const ORDER_STATUS_META: Record<string, { label: string; color: string }> = {
+  pending: { label: 'Ожидает',   color: 'text-amber-400'   },
+  paid:    { label: 'Оплачено',  color: 'text-emerald-400' },
+  failed:  { label: 'Ошибка',    color: 'text-red-400'     },
+};
+
 function AdminView() {
   const [password, setPassword] = useState('');
   const [authed, setAuthed] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [tab, setTab] = useState<'withdrawals' | 'orders'>('withdrawals');
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
   const [filter, setFilter] = useState('');
   const [updating, setUpdating] = useState<number | null>(null);
   const [selected, setSelected] = useState<Withdrawal | null>(null);
   const passwordRef = useRef('');
 
-  const fetchWithdrawals = useCallback(async (pwd: string, statusFilter = '') => {
+  const fetchData = useCallback(async (pwd: string, type: 'withdrawals' | 'orders', statusFilter = '') => {
     setLoading(true);
     try {
-      const url = statusFilter ? `${ADMIN_API}?status=${statusFilter}` : ADMIN_API;
-      const res = await fetch(url, { headers: { 'X-Admin-Password': pwd } });
+      const params = new URLSearchParams({ type });
+      if (statusFilter) params.set('status', statusFilter);
+      const res = await fetch(`${ADMIN_API}?${params}`, { headers: { 'X-Admin-Password': pwd } });
       if (res.status === 401) { setAuthed(false); return; }
       const data = await res.json();
-      setWithdrawals(data.withdrawals || []);
+      if (type === 'withdrawals') setWithdrawals(data.withdrawals || []);
+      else setOrders(data.orders || []);
     } finally {
       setLoading(false);
     }
@@ -1270,15 +1292,24 @@ function AdminView() {
     setAuthError('');
     setLoading(true);
     try {
-      const res = await fetch(ADMIN_API, { headers: { 'X-Admin-Password': password } });
+      const res = await fetch(`${ADMIN_API}?type=withdrawals`, { headers: { 'X-Admin-Password': password } });
       if (res.status === 401) { setAuthError('Неверный пароль'); return; }
       const data = await res.json();
       passwordRef.current = password;
       setWithdrawals(data.withdrawals || []);
       setAuthed(true);
+      // Подгружаем пополнения сразу
+      fetchData(password, 'orders');
     } finally {
       setLoading(false);
     }
+  };
+
+  const switchTab = (t: 'withdrawals' | 'orders') => {
+    setTab(t);
+    setFilter('');
+    setSelected(null);
+    fetchData(passwordRef.current, t);
   };
 
   const updateStatus = async (id: number, status: string) => {
@@ -1301,7 +1332,7 @@ function AdminView() {
 
   const applyFilter = (f: string) => {
     setFilter(f);
-    fetchWithdrawals(passwordRef.current, f);
+    fetchData(passwordRef.current, tab, f);
   };
 
   const inputCls = 'w-full bg-background/60 border border-gold/20 rounded-xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-foreground placeholder:text-muted-foreground/50';
@@ -1397,24 +1428,53 @@ function AdminView() {
   }
 
   // ── LIST ──
-  const counts = withdrawals.reduce((acc, w) => {
-    acc[w.status] = (acc[w.status] || 0) + 1;
+  const currentList = tab === 'withdrawals' ? withdrawals : orders;
+  const filterMeta = tab === 'withdrawals' ? STATUS_META : ORDER_STATUS_META;
+  const counts = currentList.reduce((acc, item) => {
+    acc[item.status] = (acc[item.status] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
 
+  const totalAmount = currentList.reduce((s, item) => s + item.amount, 0);
+
   return (
     <div className="space-y-4">
+      {/* Заголовок */}
       <div className="flex items-center justify-between">
-        <SectionTitle title="Выводы" subtitle={`${withdrawals.length} заявок`} icon="ShieldCheck" />
-        <button onClick={() => fetchWithdrawals(passwordRef.current, filter)}
+        <SectionTitle title="Админ" subtitle="Панель управления" icon="ShieldCheck" />
+        <button onClick={() => fetchData(passwordRef.current, tab, filter)}
           className="w-9 h-9 glass rounded-xl flex items-center justify-center text-gold">
           <Icon name="RefreshCw" size={16} />
         </button>
       </div>
 
+      {/* Вкладки */}
+      <div className="grid grid-cols-2 gap-2">
+        <button onClick={() => switchTab('withdrawals')}
+          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 transition-all
+            ${tab === 'withdrawals' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
+          <Icon name="ArrowUpFromLine" size={16} /> Выводы
+          {withdrawals.length > 0 && <span className="bg-background/20 rounded-full px-1.5 py-0.5 text-xs">{withdrawals.length}</span>}
+        </button>
+        <button onClick={() => switchTab('orders')}
+          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 transition-all
+            ${tab === 'orders' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
+          <Icon name="ArrowDownToLine" size={16} /> Пополнения
+          {orders.length > 0 && <span className="bg-background/20 rounded-full px-1.5 py-0.5 text-xs">{orders.length}</span>}
+        </button>
+      </div>
+
+      {/* Итого */}
+      {currentList.length > 0 && (
+        <div className="glass rounded-2xl p-4 flex justify-between items-center">
+          <span className="text-sm text-muted-foreground">Сумма ({currentList.length} записей)</span>
+          <span className="font-display font-bold gold-text text-lg">{totalAmount.toLocaleString('ru')} ₽</span>
+        </div>
+      )}
+
       {/* Фильтр */}
       <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-        {[{ key: '', label: 'Все' }, ...Object.entries(STATUS_META).map(([k, v]) => ({ key: k, label: v.label }))].map(f => (
+        {[{ key: '', label: 'Все' }, ...Object.entries(filterMeta).map(([k, v]) => ({ key: k, label: v.label }))].map(f => (
           <button key={f.key} onClick={() => applyFilter(f.key)}
             className={`shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all
               ${filter === f.key ? 'gold-gradient text-background' : 'glass text-muted-foreground'}`}>
@@ -1427,19 +1487,19 @@ function AdminView() {
         <div className="flex justify-center py-12 text-gold">
           <Icon name="Loader" size={28} className="animate-spin" />
         </div>
-      ) : withdrawals.length === 0 ? (
+      ) : currentList.length === 0 ? (
         <div className="glass rounded-2xl p-10 text-center text-muted-foreground text-sm">
-          Заявок нет
+          Записей нет
         </div>
-      ) : (
+      ) : tab === 'withdrawals' ? (
         <div className="space-y-2">
           {withdrawals.map(w => {
             const meta = STATUS_META[w.status] || { label: w.status, color: 'text-foreground' };
             return (
               <button key={w.id} onClick={() => setSelected(w)}
                 className="w-full glass rounded-2xl p-4 flex items-center gap-3 hover:border-gold/20 border border-transparent transition-all text-left">
-                <div className="w-10 h-10 rounded-xl bg-gold/10 flex items-center justify-center shrink-0">
-                  <Icon name="ArrowUpFromLine" size={18} className="text-gold" />
+                <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center shrink-0">
+                  <Icon name="ArrowUpFromLine" size={18} className="text-red-400" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-center gap-2">
@@ -1455,6 +1515,32 @@ function AdminView() {
                 </div>
                 <Icon name="ChevronRight" size={16} className="text-muted-foreground shrink-0" />
               </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {orders.map(o => {
+            const meta = ORDER_STATUS_META[o.status] || { label: o.status, color: 'text-foreground' };
+            return (
+              <div key={o.id} className="glass rounded-2xl p-4 flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center shrink-0">
+                  <Icon name="ArrowDownToLine" size={18} className="text-emerald-400" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex justify-between items-center gap-2">
+                    <span className="font-display font-bold text-emerald-400">+{o.amount.toLocaleString('ru')} ₽</span>
+                    <span className={`text-xs font-semibold ${meta.color}`}>{meta.label}</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground truncate mt-0.5">
+                    {o.user_name || o.user_email || '—'}
+                  </div>
+                  <div className="flex justify-between mt-0.5">
+                    <span className="text-xs font-mono text-muted-foreground/50">{o.order_number}</span>
+                    <span className="text-xs text-muted-foreground/50">{new Date(o.created_at).toLocaleString('ru')}</span>
+                  </div>
+                </div>
+              </div>
             );
           })}
         </div>

@@ -54,6 +54,42 @@ def handler(event: dict, context) -> dict:
     if method == 'GET':
         params = event.get('queryStringParameters') or {}
         status_filter = params.get('status', '')
+        data_type = params.get('type', 'withdrawals')
+
+        # Пополнения (orders)
+        if data_type == 'orders':
+            if status_filter:
+                cur.execute("""
+                    SELECT id, order_number, user_name, user_email,
+                           order_comment, amount, status, created_at, paid_at
+                    FROM orders WHERE status = %s ORDER BY created_at DESC LIMIT 100
+                """, (status_filter,))
+            else:
+                cur.execute("""
+                    SELECT id, order_number, user_name, user_email,
+                           order_comment, amount, status, created_at, paid_at
+                    FROM orders ORDER BY created_at DESC LIMIT 100
+                """)
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+            orders = []
+            for row in rows:
+                orders.append({
+                    'id': row[0],
+                    'order_number': row[1],
+                    'user_name': row[2] or '',
+                    'user_email': row[3] or '',
+                    'order_comment': row[4] or '',
+                    'amount': float(row[5]),
+                    'status': row[6],
+                    'created_at': row[7].isoformat() if row[7] else '',
+                    'paid_at': row[8].isoformat() if row[8] else '',
+                })
+            return {'statusCode': 200, 'headers': HEADERS,
+                    'body': json.dumps({'orders': orders}), 'isBase64Encoded': False}
+
+        # Выводы (withdrawals)
         if status_filter:
             cur.execute("""
                 SELECT id, request_number, user_name, user_email, user_telegram,
