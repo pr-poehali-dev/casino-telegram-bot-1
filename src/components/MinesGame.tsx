@@ -72,96 +72,117 @@ export default function MinesGame({
   const [mines, setMines] = useState(3);
   const [phase, setPhase] = useState<Phase>('idle');
   const [cells, setCells] = useState<Cell[]>(Array(GRID).fill('hidden'));
-  const [minePositions, setMinePositions] = useState<Set<number>>(new Set());
   const [opened, setOpened] = useState(0);
   const [muted, setMuted] = useState(false);
+
+  // Ref-ы для данных, которые нужны внутри колбэков без пересоздания
+  const minePositionsRef = useRef<Set<number>>(new Set());
+  const phaseRef = useRef<Phase>('idle');
+  const openedRef = useRef(0);
+  const betRef = useRef(bet);
+  const minesRef = useRef(mines);
   const audioRef = useRef<AudioContext | null>(null);
 
-  const getCtx = () => {
+  const getCtx = useCallback(() => {
     if (muted) return null;
     if (!audioRef.current) audioRef.current = getAudio();
     return audioRef.current;
-  };
+  }, [muted]);
 
   const mult = calcMultiplier(opened, mines);
   const potential = parseFloat((bet * mult).toFixed(2));
   const profit = parseFloat((potential - bet).toFixed(2));
 
   const setBet = (v: number) => {
-    if (phase !== 'idle') return;
-    setBetState(Math.min(Math.max(1, v), balance));
+    if (phaseRef.current !== 'idle') return;
+    const val = Math.min(Math.max(1, v), balance);
+    betRef.current = val;
+    setBetState(val);
   };
 
   // Начать игру
   const startGame = useCallback(() => {
-    if (bet > balance || bet <= 0) return;
-    onBalanceChange(-bet);
+    if (betRef.current > balance || betRef.current <= 0) return;
+    onBalanceChange(-betRef.current);
 
     // Генерируем позиции мин
     const positions = new Set<number>();
-    while (positions.size < mines) {
+    while (positions.size < minesRef.current) {
       positions.add(Math.floor(Math.random() * GRID));
     }
-    setMinePositions(positions);
+    minePositionsRef.current = positions;
+    openedRef.current = 0;
+    phaseRef.current = 'playing';
     setCells(Array(GRID).fill('hidden'));
     setOpened(0);
     setPhase('playing');
-  }, [bet, balance, mines, onBalanceChange]);
+  }, [balance, onBalanceChange]);
 
   // Открыть клетку
   const openCell = useCallback((idx: number) => {
-    if (phase !== 'playing') return;
-    if (cells[idx] !== 'hidden') return;
+    if (phaseRef.current !== 'playing') return;
 
     const ctx = getCtx();
+    const positions = minePositionsRef.current;
 
-    if (minePositions.has(idx)) {
-      // Мина!
+    if (positions.has(idx)) {
+      // Мина — показываем все мины
       if (ctx) playMine(ctx);
+      phaseRef.current = 'lost';
+      setPhase('lost');
       setCells(prev => {
         const next = [...prev];
-        // Открываем все мины
-        minePositions.forEach(m => { next[m] = 'mine'; });
-        next[idx] = 'mine';
+        positions.forEach(m => { next[m] = 'mine'; });
         return next;
       });
-      setPhase('lost');
-      onGameResult?.(bet, 0, false, { mines, opened, hit: idx });
+      onGameResult?.(betRef.current, 0, false, { mines: minesRef.current, opened: openedRef.current, hit: idx });
     } else {
       // Безопасно
       if (ctx) playClick(ctx);
-      const newOpened = opened + 1;
+      const newOpened = openedRef.current + 1;
+      openedRef.current = newOpened;
       setOpened(newOpened);
       setCells(prev => { const next = [...prev]; next[idx] = 'safe'; return next; });
 
       // Все безопасные открыты — авто-победа
-      if (newOpened === GRID - mines) {
-        const finalMult = calcMultiplier(newOpened, mines);
-        const payout = parseFloat((bet * finalMult).toFixed(2));
+      if (newOpened === GRID - minesRef.current) {
+        const finalMult = calcMultiplier(newOpened, minesRef.current);
+        const payout = parseFloat((betRef.current * finalMult).toFixed(2));
         if (ctx) playCashout(ctx);
         onBalanceChange(payout);
+        phaseRef.current = 'won';
         setPhase('won');
-        onGameResult?.(bet, payout, true, { mines, opened: newOpened, mult: finalMult, auto: true });
+        onGameResult?.(betRef.current, payout, true, { mines: minesRef.current, opened: newOpened, mult: finalMult, auto: true });
       }
     }
-  }, [phase, cells, minePositions, opened, bet, mines, onBalanceChange, onGameResult]);
+  }, [getCtx, onBalanceChange, onGameResult]);
 
   // Забрать выигрыш
   const cashout = useCallback(() => {
-    if (phase !== 'playing' || opened === 0) return;
+    if (phaseRef.current !== 'playing' || openedRef.current === 0) return;
     const ctx = getCtx();
     if (ctx) playCashout(ctx);
-    onBalanceChange(potential);
+    const currentMult = calcMultiplier(openedRef.current, minesRef.current);
+    const payout = parseFloat((betRef.current * currentMult).toFixed(2));
+    onBalanceChange(payout);
+    phaseRef.current = 'won';
     setPhase('won');
-    onGameResult?.(bet, potential, true, { mines, opened, mult });
-  }, [phase, opened, potential, bet, mines, mult, onBalanceChange, onGameResult]);
+    onGameResult?.(betRef.current, payout, true, { mines: minesRef.current, opened: openedRef.current, mult: currentMult });
+  }, [getCtx, onBalanceChange, onGameResult]);
 
   // Сброс
   const reset = () => {
+    minePositionsRef.current = new Set();
+    openedRef.current = 0;
+    phaseRef.current = 'idle';
     setCells(Array(GRID).fill('hidden'));
-    setMinePositions(new Set());
     setOpened(0);
     setPhase('idle');
+  };
+
+  const setMinesAndRef = (n: number) => {
+    minesRef.current = n;
+    setMines(n);
   };
 
   const safeCells = GRID - mines;
@@ -211,7 +232,7 @@ export default function MinesGame({
             <label className="text-xs text-muted-foreground uppercase tracking-wider mb-2 block">Количество мин</label>
             <div className="grid grid-cols-6 gap-1.5">
               {MINE_OPTIONS.map(n => (
-                <button key={n} onClick={() => setMines(n)}
+                <button key={n} onClick={() => setMinesAndRef(n)}
                   className={`py-2 rounded-xl text-sm font-bold transition-all
                     ${mines === n ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground hover:text-gold'}`}>
                   {n}
@@ -293,7 +314,7 @@ export default function MinesGame({
                   ? 'bg-emerald-500/15 border-2 border-emerald-500/50 animate-win-pop'
                   : clickable
                   ? 'glass hover:border-gold/50 hover:bg-gold/8 active:scale-95 cursor-pointer'
-                  : phase === 'lost' && minePositions.has(idx)
+                  : phase === 'lost' && minePositionsRef.current.has(idx)
                   ? 'bg-red-500/15 border border-red-500/30'
                   : 'glass opacity-60'
                 }
@@ -301,13 +322,8 @@ export default function MinesGame({
             >
               {isMineCell && '💣'}
               {isSafe && <Icon name="Gem" size={18} className="text-emerald-400" />}
-              {isHidden && phase === 'lost' && minePositions.has(idx) && (
+              {isHidden && phase === 'lost' && minePositionsRef.current.has(idx) && (
                 <span className="opacity-40">💣</span>
-              )}
-              {isHidden && !minePositions.has(idx) && phase !== 'lost' && (
-                <span className="text-muted-foreground/20 text-xs font-mono">
-                  {clickable ? '' : ''}
-                </span>
               )}
             </button>
           );
