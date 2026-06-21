@@ -117,12 +117,8 @@ export default function Index() {
 
   const notify = (msg: string) => toast(msg, { description: 'Эта функция настраивается отдельно — напишите детали.' });
 
-  const openGame = (id: string, name: string) => {
-    if (id === 'slots' || id === 'coin' || id === 'dice' || id === 'roulette' || id === 'blackjack') {
-      setActiveGame(id);
-    } else {
-      notify(`Открываю «${name}»`);
-    }
+  const openGame = (id: string) => {
+    setActiveGame(id);
   };
 
   // Экран загрузки
@@ -269,7 +265,7 @@ export default function Index() {
   );
 }
 
-function HomeView({ balance, setSection, openGame, notify, canClaimBonus }: { balance: number; setSection: (s: Section) => void; openGame: (id: string, name: string) => void; notify: (m: string) => void; canClaimBonus?: boolean }) {
+function HomeView({ balance, setSection, openGame, notify, canClaimBonus }: { balance: number; setSection: (s: Section) => void; openGame: (id: string) => void; notify: (m: string) => void; canClaimBonus?: boolean }) {
   return (
     <div className="space-y-6">
       <div className="animate-float-up relative rounded-3xl glass glow-soft overflow-hidden p-6">
@@ -330,7 +326,7 @@ function HomeView({ balance, setSection, openGame, notify, canClaimBonus }: { ba
         </div>
         <div className="grid grid-cols-2 gap-3">
           {GAMES.slice(0, 4).map((g, i) => (
-            <GameCard key={g.id} game={g} delay={120 + i * 60} onClick={() => openGame(g.id, g.name)} />
+            <GameCard key={g.id} game={g} delay={120 + i * 60} onClick={() => openGame(g.id)} />
           ))}
         </div>
       </div>
@@ -375,13 +371,13 @@ function GameCard({ game, delay, onClick }: { game: typeof GAMES[number]; delay:
   );
 }
 
-function GamesView({ openGame }: { openGame: (id: string, name: string) => void }) {
+function GamesView({ openGame }: { openGame: (id: string) => void }) {
   return (
     <div className="space-y-5">
       <SectionTitle title="Игры" subtitle="Выбери, во что сыграть" icon="Gamepad2" />
       <div className="grid grid-cols-2 gap-3">
         {GAMES.map((g, i) => (
-          <GameCard key={g.id} game={g} delay={i * 70} onClick={() => openGame(g.id, g.name)} />
+          <GameCard key={g.id} game={g} delay={i * 70} onClick={() => openGame(g.id)} />
         ))}
         <button
           onClick={() => toast('Скоро новые игры')}
