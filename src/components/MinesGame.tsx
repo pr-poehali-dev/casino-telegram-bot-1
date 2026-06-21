@@ -295,36 +295,29 @@ export default function MinesGame({
       {/* Поле 5×5 */}
       <div className="grid grid-cols-5 gap-2">
         {cells.map((cell, idx) => {
-          const isMineCell = cell === 'mine';
+          const isMine = cell === 'mine';
           const isSafe = cell === 'safe';
           const isHidden = cell === 'hidden';
-          const clickable = phase === 'playing' && isHidden;
 
           return (
             <button
               key={idx}
-              onClick={() => clickable && openCell(idx)}
-              disabled={!clickable}
+              onClick={() => openCell(idx)}
               className={`
                 aspect-square rounded-xl flex items-center justify-center text-xl font-bold
-                transition-all duration-200 select-none
-                ${isMineCell
-                  ? 'bg-red-500/20 border-2 border-red-500/60 animate-win-pop'
+                transition-all duration-150 select-none border-2
+                ${isMine
+                  ? 'bg-red-500/25 border-red-500/70'
                   : isSafe
-                  ? 'bg-emerald-500/15 border-2 border-emerald-500/50 animate-win-pop'
-                  : clickable
-                  ? 'glass hover:border-gold/50 hover:bg-gold/8 active:scale-95 cursor-pointer'
-                  : phase === 'lost' && minePositionsRef.current.has(idx)
-                  ? 'bg-red-500/15 border border-red-500/30'
-                  : 'glass opacity-60'
+                  ? 'bg-emerald-500/20 border-emerald-500/60'
+                  : phase === 'playing'
+                  ? 'glass border-transparent hover:border-gold/50 hover:bg-gold/10 active:scale-95 cursor-pointer'
+                  : 'glass border-transparent opacity-50'
                 }
               `}
             >
-              {isMineCell && '💣'}
-              {isSafe && <Icon name="Gem" size={18} className="text-emerald-400" />}
-              {isHidden && phase === 'lost' && minePositionsRef.current.has(idx) && (
-                <span className="opacity-40">💣</span>
-              )}
+              {isMine && '💣'}
+              {isSafe && <Icon name="Gem" size={20} className="text-emerald-400" />}
             </button>
           );
         })}
