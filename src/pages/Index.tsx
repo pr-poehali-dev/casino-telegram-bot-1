@@ -1986,7 +1986,8 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
   const [password, setPassword] = useState('');
   const [authed, setAuthed] = useState(false);
   const [authError, setAuthError] = useState('');
-  const [tab, setTab] = useState<'withdrawals' | 'orders'>('withdrawals');
+  const [tab, setTab] = useState<'withdrawals' | 'orders' | 'top'>('withdrawals');
+  const [topDepositors, setTopDepositors] = useState<{ rank: number; user_id: number; username: string; email: string; deposits_count: number; total_deposited: number; last_deposit: string | null; balance: number }[]>([]);
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [stats, setStats] = useState<Record<string, number> | null>(null);
@@ -2012,6 +2013,14 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
     if (res.ok) {
       const data = await res.json();
       setChartData(data.chart || []);
+    }
+  }, []);
+
+  const fetchTopDepositors = useCallback(async (pwd: string) => {
+    const res = await fetch(`${ADMIN_API}?type=top-depositors`, { headers: { 'X-Admin-Password': pwd } });
+    if (res.ok) {
+      const data = await res.json();
+      setTopDepositors(data.leaders || []);
     }
   }, []);
 
@@ -2043,16 +2052,18 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       fetchData(password, 'orders');
       fetchStats(password);
       fetchChart(password, 14);
+      fetchTopDepositors(password);
     } finally {
       setLoading(false);
     }
   };
 
-  const switchTab = (t: 'withdrawals' | 'orders') => {
+  const switchTab = (t: 'withdrawals' | 'orders' | 'top') => {
     setTab(t);
     setFilter('');
     setSelected(null);
-    fetchData(passwordRef.current, t);
+    if (t !== 'top') fetchData(passwordRef.current, t);
+    if (t === 'top') fetchTopDepositors(passwordRef.current);
   };
 
   // Запрос разрешения на push-уведомления при входе
@@ -2342,7 +2353,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       </div>
 
       {/* Вкладки */}
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         <button onClick={() => switchTab('withdrawals')}
           className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 transition-all
             ${tab === 'withdrawals' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
@@ -2355,10 +2366,15 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
           <Icon name="ArrowDownToLine" size={16} /> Пополнения
           {orders.length > 0 && <span className="bg-background/20 rounded-full px-1.5 py-0.5 text-xs">{orders.length}</span>}
         </button>
+        <button onClick={() => switchTab('top')}
+          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 transition-all
+            ${tab === 'top' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
+          <Icon name="Crown" size={16} /> Топ
+        </button>
       </div>
 
       {/* Итого */}
-      {currentList.length > 0 && (
+      {tab !== 'top' && currentList.length > 0 && (
         <div className="glass rounded-2xl p-4 flex justify-between items-center">
           <span className="text-sm text-muted-foreground">Сумма ({currentList.length} записей)</span>
           <span className="font-display font-bold gold-text text-lg">{totalAmount.toLocaleString('ru')} ₽</span>
@@ -2366,7 +2382,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       )}
 
       {/* Фильтр */}
-      <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+      {tab !== 'top' && <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
         {[{ key: '', label: 'Все' }, ...Object.entries(filterMeta).map(([k, v]) => ({ key: k, label: v.label }))].map(f => (
           <button key={f.key} onClick={() => applyFilter(f.key)}
             className={`shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all
@@ -2374,13 +2390,13 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
             {f.label}{f.key && counts[f.key] ? ` (${counts[f.key]})` : ''}
           </button>
         ))}
-      </div>
+      </div>}
 
-      {loading ? (
+      {loading && tab !== 'top' ? (
         <div className="flex justify-center py-12 text-gold">
           <Icon name="Loader" size={28} className="animate-spin" />
         </div>
-      ) : currentList.length === 0 ? (
+      ) : !loading && tab !== 'top' && currentList.length === 0 ? (
         <div className="glass rounded-2xl p-10 text-center text-muted-foreground text-sm">
           Записей нет
         </div>
@@ -2411,7 +2427,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
             );
           })}
         </div>
-      ) : (
+      ) : tab === 'orders' ? (
         <div className="space-y-2">
           {orders.map(o => {
             const meta = ORDER_STATUS_META[o.status] || { label: o.status, color: 'text-foreground' };
@@ -2437,7 +2453,38 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
             );
           })}
         </div>
-      )}
+      ) : tab === 'top' ? (
+        <div className="space-y-2">
+          {topDepositors.length === 0 ? (
+            <div className="glass rounded-2xl p-10 text-center text-muted-foreground text-sm">Нет данных</div>
+          ) : topDepositors.map((p) => (
+            <div key={p.user_id} className="glass rounded-2xl p-4 flex items-center gap-3">
+              <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 font-display font-bold text-sm
+                ${p.rank === 1 ? 'gold-gradient text-background glow-gold' :
+                  p.rank === 2 ? 'bg-white/15 text-foreground' :
+                  p.rank === 3 ? 'bg-amber-700/40 text-amber-300' : 'glass text-muted-foreground'}`}>
+                {p.rank <= 3 ? ['🥇','🥈','🥉'][p.rank - 1] : `#${p.rank}`}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-sm truncate">{p.username || p.email || `ID ${p.user_id}`}</span>
+                  <span className="font-display font-bold text-emerald-400 shrink-0">+{p.total_deposited.toLocaleString('ru')} ₽</span>
+                </div>
+                <div className="flex items-center justify-between mt-0.5">
+                  <span className="text-xs text-muted-foreground truncate">{p.email}</span>
+                  <span className="text-xs text-muted-foreground shrink-0">{p.deposits_count} пополн.</span>
+                </div>
+                <div className="flex items-center justify-between mt-0.5">
+                  <span className="text-xs text-muted-foreground/50">Баланс: {p.balance.toLocaleString('ru')} ₽</span>
+                  {p.last_deposit && (
+                    <span className="text-xs text-muted-foreground/50">{new Date(p.last_deposit).toLocaleDateString('ru')}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

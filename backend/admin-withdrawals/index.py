@@ -56,6 +56,40 @@ def handler(event: dict, context) -> dict:
         status_filter = params.get('status', '')
         data_type = params.get('type', 'withdrawals')
 
+        # Топ игроков по депозитам
+        if data_type == 'top-depositors':
+            cur.execute("""
+                SELECT
+                    u.id,
+                    u.username,
+                    u.email,
+                    COUNT(o.id)                AS deposits_count,
+                    COALESCE(SUM(o.amount), 0) AS total_deposited,
+                    MAX(o.created_at)          AS last_deposit,
+                    u.balance
+                FROM users u
+                JOIN orders o ON o.user_id = u.id AND o.status = 'paid'
+                GROUP BY u.id, u.username, u.email, u.balance
+                ORDER BY total_deposited DESC
+                LIMIT 30
+            """)
+            rows = cur.fetchall()
+            cur.close(); conn.close()
+            leaders = []
+            for i, row in enumerate(rows):
+                leaders.append({
+                    'rank': i + 1,
+                    'user_id': int(row[0]),
+                    'username': row[1] or '',
+                    'email': row[2] or '',
+                    'deposits_count': int(row[3]),
+                    'total_deposited': float(row[4]),
+                    'last_deposit': row[5].isoformat() if row[5] else None,
+                    'balance': float(row[6]),
+                })
+            return {'statusCode': 200, 'headers': HEADERS,
+                    'body': json.dumps({'leaders': leaders}), 'isBase64Encoded': False}
+
         # График пополнений по дням
         if data_type == 'chart':
             days = int(params.get('days', '30'))
