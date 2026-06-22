@@ -38,7 +38,12 @@ const accentColor = (a: string) =>
 const AUTH_API = 'https://functions.poehali.dev/e956557c-ce79-4797-8cec-5934cb2924d8';
 const AUTH_TOKEN_KEY = 'casino_auth_token';
 
-interface AuthUser { id: number; email: string; username: string; balance: number; referral_code?: string; }
+interface AuthUser {
+  id: number; email: string; username: string; balance: number; referral_code?: string;
+  vip_level?: string; vip_label?: string; vip_emoji?: string; vip_cashback_pct?: number;
+  total_deposited?: number; cashback_available?: number;
+  next_vip_level?: string; next_vip_label?: string; next_vip_min?: number; next_vip_emoji?: string;
+}
 
 export default function Index() {
   const [section, setSection] = useState<Section>('home');
@@ -100,18 +105,23 @@ export default function Index() {
   }, []);
 
   // Синхронизируем баланс с БД при изменении
-  const syncBalance = useCallback(async (delta: number) => {
+  const syncBalance = useCallback(async (delta: number, isDeposit = false) => {
     setBalance(b => b + delta);
     const token = localStorage.getItem(AUTH_TOKEN_KEY);
     if (!token) return;
     const res = await fetch(`${AUTH_API}?action=balance`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
-      body: JSON.stringify({ delta }),
+      body: JSON.stringify({ delta, is_deposit: isDeposit }),
     });
     if (res.ok) {
       const data = await res.json();
       setBalance(data.balance);
+      // После депозита обновляем данные пользователя (VIP-уровень мог измениться)
+      if (isDeposit) {
+        fetch(`${AUTH_API}?action=me`, { headers: { 'X-Auth-Token': token } })
+          .then(r => r.json()).then(d => { if (d.user) setUser(d.user); }).catch(() => {});
+      }
     }
   }, []);
 
@@ -223,7 +233,7 @@ export default function Index() {
               {section === 'deposit' && <DepositView notify={notify} onBalanceChange={syncBalance} />}
               {section === 'withdraw' && <WithdrawView balance={balance} notify={notify} />}
               {section === 'stats' && <StatsView />}
-              {section === 'profile' && <ProfileView setSection={setSection} notify={notify} user={user} onLogout={handleLogout} />}
+              {section === 'profile' && <ProfileView setSection={setSection} notify={notify} user={user} onLogout={handleLogout} onBalanceChange={syncBalance} />}
               {section === 'support' && <SupportView notify={notify} />}
               {section === 'admin' && <AdminView onPendingChange={setPendingWithdrawals} />}
               {section === 'referral' && <ReferralView user={user} onBack={() => setSection('profile')} />}
@@ -434,7 +444,7 @@ const ORDER_STATUS_API = 'https://functions.poehali.dev/e956557c-ce79-4797-8cec-
 
 type DepositStep = 'method' | 'amount' | 'user-info' | 'crypto-form' | 'redirecting' | 'waiting' | 'success';
 
-function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string) => void; onBalanceChange: (delta: number) => void }) {
+function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string) => void; onBalanceChange: (delta: number, isDeposit?: boolean) => void }) {
   const [step, setStep] = useState<DepositStep>('method');
   const [method, setMethod] = useState<typeof DEPOSIT_METHODS[0] | null>(null);
   const [amount, setAmount] = useState(1000);
@@ -495,7 +505,7 @@ function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string)
             if (pollRef.current) clearInterval(pollRef.current);
             setPaidAmount(data.amount);
             setOrderNumber(data.order_number);
-            onBalanceChange(data.amount);
+            onBalanceChange(data.amount, true);
             setStep('success');
             return;
           }
@@ -1313,20 +1323,52 @@ function StatsView() {
   );
 }
 
-function ProfileView({ setSection, notify, user, onLogout }: { setSection: (s: Section) => void; notify: (m: string) => void; user: AuthUser | null; onLogout: () => void }) {
+const VIP_COLORS: Record<string, string> = {
+  none: '#888888', bronze: '#cd7f32', silver: '#c0c0c0', gold: '#f5c842', platinum: '#e5e4e2',
+};
+const VIP_LEVELS_ORDER = ['none', 'bronze', 'silver', 'gold', 'platinum'];
+
+function ProfileView({ setSection, notify, user, onLogout, onBalanceChange }: {
+  setSection: (s: Section) => void; notify: (m: string) => void;
+  user: AuthUser | null; onLogout: () => void; onBalanceChange: (d: number) => void;
+}) {
   const [tapCount, setTapCount] = useState(0);
   const tapTimer = useRef<number | null>(null);
+  const [cashbackLoading, setCashbackLoading] = useState(false);
+  const [localCashback, setLocalCashback] = useState<number | null>(null);
+
+  const cashbackAvailable = localCashback ?? (user?.cashback_available || 0);
+  const vipLevel = user?.vip_level || 'none';
+  const vipColor = VIP_COLORS[vipLevel] || VIP_COLORS.none;
+  const totalDeposited = user?.total_deposited || 0;
+  const nextMin = user?.next_vip_min || 0;
+  const progressPct = vipLevel === 'platinum' ? 100
+    : nextMin > 0 ? Math.min(100, Math.round((totalDeposited / nextMin) * 100)) : 0;
 
   const handleSecretTap = () => {
     const next = tapCount + 1;
     setTapCount(next);
     if (tapTimer.current) clearTimeout(tapTimer.current);
-    if (next >= 5) {
-      setTapCount(0);
-      setSection('admin');
-      return;
-    }
+    if (next >= 5) { setTapCount(0); setSection('admin'); return; }
     tapTimer.current = window.setTimeout(() => setTapCount(0), 1500);
+  };
+
+  const claimCashback = async () => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!token) return;
+    setCashbackLoading(true);
+    const res = await fetch(`${AUTH_API}?action=cashback`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+    });
+    const data = await res.json();
+    if (res.ok) {
+      onBalanceChange(data.cashback);
+      setLocalCashback(0);
+      toast.success(`Кешбэк ${data.cashback.toLocaleString('ru')} ₽ зачислен!`);
+    } else {
+      toast.error(data.error || 'Ошибка');
+    }
+    setCashbackLoading(false);
   };
 
   const items: { name: string; icon: string; action: () => void; danger?: boolean; highlight?: boolean }[] = [
@@ -1339,30 +1381,106 @@ function ProfileView({ setSection, notify, user, onLogout }: { setSection: (s: S
     { name: 'Настройки', icon: 'Settings', action: () => notify('Открываю настройки') },
     { name: 'Выйти из аккаунта', icon: 'LogOut', action: onLogout, danger: true },
   ];
+
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
+      {/* Шапка профиля */}
       <div className="animate-float-up glass rounded-3xl p-6 text-center relative overflow-hidden glow-soft">
-        <div className="absolute inset-x-0 top-0 h-24 gold-gradient opacity-20" />
+        <div className="absolute inset-x-0 top-0 h-24 opacity-20" style={{ background: `linear-gradient(to bottom, ${vipColor}, transparent)` }} />
         <div className="relative">
-          <div className="w-20 h-20 rounded-2xl gold-gradient mx-auto flex items-center justify-center glow-gold mb-3 cursor-pointer select-none"
+          <div className="w-20 h-20 rounded-2xl mx-auto flex items-center justify-center glow-gold mb-3 cursor-pointer select-none"
+            style={{ background: `linear-gradient(135deg, ${vipColor}cc, ${vipColor}44)`, border: `2px solid ${vipColor}66` }}
             onClick={handleSecretTap}>
             <Icon name="User" size={36} className="text-background" />
           </div>
           <h2 className="font-display text-xl font-bold">{user?.username || 'Игрок'}</h2>
           <p className="text-xs text-muted-foreground mt-0.5">{user?.email}</p>
-          <span className="inline-flex items-center gap-1 mt-1 text-xs text-gold bg-gold/10 px-3 py-1 rounded-full">
-            <Icon name="Crown" size={12} /> VIP статус
+          <span className="inline-flex items-center gap-1.5 mt-2 text-xs font-bold px-3 py-1 rounded-full"
+            style={{ color: vipColor, background: `${vipColor}18`, border: `1px solid ${vipColor}44` }}>
+            {user?.vip_emoji || '⬜'} {user?.vip_label || 'Нет уровня'}
+            {(user?.vip_cashback_pct || 0) > 0 && <span className="opacity-70">· {user?.vip_cashback_pct}% кешбэк</span>}
           </span>
         </div>
       </div>
+
+      {/* VIP-прогресс */}
+      <div className="animate-float-up glass rounded-2xl p-4 space-y-3" style={{ animationDelay: '60ms' }}>
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider">VIP-прогресс</p>
+          <span className="text-xs font-semibold" style={{ color: vipColor }}>
+            {totalDeposited.toLocaleString('ru')} ₽ задепозитировано
+          </span>
+        </div>
+        {/* Шкала уровней */}
+        <div className="flex items-center gap-1">
+          {VIP_LEVELS_ORDER.filter(l => l !== 'none').map((lvl) => {
+            const isActive = VIP_LEVELS_ORDER.indexOf(lvl) <= VIP_LEVELS_ORDER.indexOf(vipLevel);
+            const isCurrent = lvl === vipLevel;
+            const color = VIP_COLORS[lvl];
+            return (
+              <div key={lvl} className={`flex-1 flex flex-col items-center gap-1`}>
+                <div className={`w-full h-1.5 rounded-full transition-all ${isActive ? '' : 'bg-white/10'}`}
+                  style={isActive ? { background: color } : {}} />
+                <span className="text-[10px] font-bold transition-all"
+                  style={{ color: isCurrent ? color : isActive ? color : '#555' }}>
+                  {lvl === 'bronze' ? '🥉' : lvl === 'silver' ? '🥈' : lvl === 'gold' ? '🥇' : '💎'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        {vipLevel !== 'platinum' && user?.next_vip_label && (
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>До {user.next_vip_emoji} {user.next_vip_label}</span>
+            <span className="font-semibold">{Math.max(0, (nextMin - totalDeposited)).toLocaleString('ru')} ₽</span>
+          </div>
+        )}
+        {vipLevel !== 'platinum' && (
+          <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+            <div className="h-full rounded-full transition-all duration-500"
+              style={{ width: `${progressPct}%`, background: vipColor }} />
+          </div>
+        )}
+        {vipLevel === 'platinum' && (
+          <p className="text-xs text-center font-semibold" style={{ color: vipColor }}>
+            💎 Максимальный уровень — 12% кешбэк
+          </p>
+        )}
+      </div>
+
+      {/* Кешбэк */}
+      {(user?.vip_cashback_pct || 0) > 0 && (
+        <div className="animate-float-up glass rounded-2xl p-4 flex items-center gap-4" style={{ animationDelay: '100ms' }}>
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0"
+            style={{ background: `${vipColor}18`, border: `1px solid ${vipColor}44` }}>
+            <Icon name="RotateCcw" size={22} style={{ color: vipColor }} />
+          </div>
+          <div className="flex-1">
+            <p className="font-semibold text-sm">Кешбэк {user?.vip_cashback_pct}%</p>
+            <p className="text-xs text-muted-foreground">
+              {cashbackAvailable > 0
+                ? `Доступно: ${cashbackAvailable.toLocaleString('ru')} ₽`
+                : 'Накапливается с каждого проигрыша'}
+            </p>
+          </div>
+          {cashbackAvailable > 0 && (
+            <button onClick={claimCashback} disabled={cashbackLoading}
+              className="shrink-0 font-bold text-sm px-4 py-2 rounded-xl transition-all disabled:opacity-50"
+              style={{ background: `${vipColor}22`, color: vipColor, border: `1px solid ${vipColor}55` }}>
+              {cashbackLoading
+                ? <Icon name="Loader" size={16} className="animate-spin" />
+                : `Забрать`}
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Меню */}
       <div className="space-y-2.5">
         {items.map((it, i) => (
-          <button
-            key={it.name}
-            onClick={it.action}
+          <button key={it.name} onClick={it.action}
             className="animate-float-up w-full glass rounded-2xl p-4 flex items-center gap-3 hover-lift"
-            style={{ animationDelay: `${i * 50}ms` }}
-          >
+            style={{ animationDelay: `${(i + 3) * 40}ms` }}>
             <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${it.danger ? 'bg-red-500/10 text-red-400' : it.highlight ? 'gold-gradient text-background' : 'bg-gold/10 text-gold'}`}>
               <Icon name={it.icon} size={20} />
             </div>

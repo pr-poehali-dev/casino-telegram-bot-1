@@ -13,6 +13,30 @@ HEADERS = {
 }
 
 
+VIP_LEVELS = [
+    {'name': 'none',     'label': 'Нет уровня', 'min': 0,       'cashback_pct': 0,    'color': '#888888', 'emoji': '⬜'},
+    {'name': 'bronze',   'label': 'Bronze',      'min': 5000,    'cashback_pct': 3,    'color': '#cd7f32', 'emoji': '🥉'},
+    {'name': 'silver',   'label': 'Silver',      'min': 25000,   'cashback_pct': 5,    'color': '#c0c0c0', 'emoji': '🥈'},
+    {'name': 'gold',     'label': 'Gold',        'min': 100000,  'cashback_pct': 8,    'color': '#f5c842', 'emoji': '🥇'},
+    {'name': 'platinum', 'label': 'Platinum',    'min': 500000,  'cashback_pct': 12,   'color': '#e5e4e2', 'emoji': '💎'},
+]
+
+
+def calc_vip(total_deposited: float) -> dict:
+    level = VIP_LEVELS[0]
+    for v in VIP_LEVELS:
+        if total_deposited >= v['min']:
+            level = v
+    return level
+
+
+def next_vip(total_deposited: float) -> dict | None:
+    for v in VIP_LEVELS:
+        if total_deposited < v['min']:
+            return v
+    return None
+
+
 def get_conn():
     return psycopg2.connect(os.environ['DATABASE_URL'])
 
@@ -23,11 +47,31 @@ def hash_password(password: str) -> str:
 
 def get_user_by_token(cur, token: str):
     cur.execute("""
-        SELECT u.id, u.email, u.username, u.balance, u.referral_code
+        SELECT u.id, u.email, u.username, u.balance, u.referral_code,
+               u.vip_level, u.total_deposited, u.cashback_available
         FROM sessions s JOIN users u ON s.user_id = u.id
         WHERE s.token = %s AND s.expires_at > NOW()
     """, (token,))
     return cur.fetchone()
+
+
+def user_to_dict(u) -> dict:
+    vip = calc_vip(float(u[6]))
+    nxt = next_vip(float(u[6]))
+    return {
+        'id': u[0], 'email': u[1], 'username': u[2], 'balance': float(u[3]),
+        'referral_code': u[4],
+        'vip_level': vip['name'],
+        'vip_label': vip['label'],
+        'vip_emoji': vip['emoji'],
+        'vip_cashback_pct': vip['cashback_pct'],
+        'total_deposited': float(u[6]),
+        'cashback_available': float(u[7]),
+        'next_vip_level': nxt['name'] if nxt else None,
+        'next_vip_label': nxt['label'] if nxt else None,
+        'next_vip_min': nxt['min'] if nxt else None,
+        'next_vip_emoji': nxt['emoji'] if nxt else None,
+    }
 
 
 def handler(event: dict, context) -> dict:
@@ -111,8 +155,14 @@ def handler(event: dict, context) -> dict:
 
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
             'token': session_token,
-            'user': {'id': user_id, 'email': email, 'username': username, 'balance': start_balance,
-                     'referral_code': new_ref_code}
+            'user': {
+                'id': user_id, 'email': email, 'username': username, 'balance': start_balance,
+                'referral_code': new_ref_code,
+                'vip_level': 'none', 'vip_label': 'Нет уровня', 'vip_emoji': '⬜',
+                'vip_cashback_pct': 0, 'total_deposited': 0.0, 'cashback_available': 0.0,
+                'next_vip_level': 'bronze', 'next_vip_label': 'Bronze',
+                'next_vip_min': 5000, 'next_vip_emoji': '🥉',
+            }
         }), 'isBase64Encoded': False}
 
     # ── LOGIN ──
@@ -121,8 +171,9 @@ def handler(event: dict, context) -> dict:
         password = str(body.get('password', ''))
 
         cur.execute("""
-            SELECT id, email, username, balance FROM users
-            WHERE email = %s AND password_hash = %s AND is_active = TRUE
+            SELECT id, email, username, balance, referral_code,
+                   vip_level, total_deposited, cashback_available
+            FROM users WHERE email = %s AND password_hash = %s AND is_active = TRUE
         """, (email, hash_password(password)))
         user = cur.fetchone()
         if not user:
@@ -132,15 +183,11 @@ def handler(event: dict, context) -> dict:
 
         session_token = secrets.token_hex(32)
         cur.execute("INSERT INTO sessions (user_id, token) VALUES (%s, %s)", (user[0], session_token))
-        cur.execute("SELECT referral_code FROM users WHERE id = %s", (user[0],))
-        ref_row = cur.fetchone()
-        ref_code_val = ref_row[0] if ref_row else None
         conn.commit(); cur.close(); conn.close()
 
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
             'token': session_token,
-            'user': {'id': user[0], 'email': user[1], 'username': user[2], 'balance': float(user[3]),
-                     'referral_code': ref_code_val}
+            'user': user_to_dict(user)
         }), 'isBase64Encoded': False}
 
     # ── ME ──
@@ -155,8 +202,7 @@ def handler(event: dict, context) -> dict:
             return {'statusCode': 401, 'headers': HEADERS,
                     'body': json.dumps({'error': 'Сессия истекла, войдите снова'}), 'isBase64Encoded': False}
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
-            'user': {'id': user[0], 'email': user[1], 'username': user[2], 'balance': float(user[3]),
-                     'referral_code': user[4]}
+            'user': user_to_dict(user)
         }), 'isBase64Encoded': False}
 
     # ── BALANCE ──
@@ -172,14 +218,52 @@ def handler(event: dict, context) -> dict:
                     'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
 
         delta = float(body.get('delta', 0))
-        cur.execute("""
-            UPDATE users SET balance = GREATEST(0, balance + %s), updated_at = NOW()
-            WHERE id = %s RETURNING balance
-        """, (delta, user[0]))
-        new_balance = float(cur.fetchone()[0])
+        is_deposit = bool(body.get('is_deposit', False))
+
+        # При проигрыше (delta < 0) начисляем кешбэк согласно VIP-уровню
+        vip = calc_vip(float(user[6]))
+        cashback_earned = 0.0
+        if delta < 0 and vip['cashback_pct'] > 0:
+            cashback_earned = round(abs(delta) * vip['cashback_pct'] / 100, 2)
+
+        # При депозите обновляем total_deposited и пересчитываем vip_level
+        if is_deposit and delta > 0:
+            cur.execute("""
+                UPDATE users
+                SET balance = GREATEST(0, balance + %s),
+                    total_deposited = total_deposited + %s,
+                    vip_level = CASE
+                        WHEN total_deposited + %s >= 500000 THEN 'platinum'
+                        WHEN total_deposited + %s >= 100000 THEN 'gold'
+                        WHEN total_deposited + %s >= 25000  THEN 'silver'
+                        WHEN total_deposited + %s >= 5000   THEN 'bronze'
+                        ELSE 'none'
+                    END,
+                    updated_at = NOW()
+                WHERE id = %s RETURNING balance, total_deposited, vip_level
+            """, (delta, delta, delta, delta, delta, delta, user[0]))
+        elif cashback_earned > 0:
+            cur.execute("""
+                UPDATE users
+                SET balance = GREATEST(0, balance + %s),
+                    cashback_available = cashback_available + %s,
+                    updated_at = NOW()
+                WHERE id = %s RETURNING balance, total_deposited, vip_level
+            """, (delta, cashback_earned, user[0]))
+        else:
+            cur.execute("""
+                UPDATE users SET balance = GREATEST(0, balance + %s), updated_at = NOW()
+                WHERE id = %s RETURNING balance, total_deposited, vip_level
+            """, (delta, user[0]))
+
+        row = cur.fetchone()
+        new_balance = float(row[0])
         conn.commit(); cur.close(); conn.close()
         return {'statusCode': 200, 'headers': HEADERS,
-                'body': json.dumps({'balance': new_balance}), 'isBase64Encoded': False}
+                'body': json.dumps({
+                    'balance': new_balance,
+                    'cashback_earned': cashback_earned,
+                }), 'isBase64Encoded': False}
 
     # ── LOGOUT ──
     if action == 'logout' and http_method == 'POST':
@@ -537,6 +621,72 @@ def handler(event: dict, context) -> dict:
             'bonus_amount': float(bonus_amount),
             'new_balance': new_balance,
         }), 'isBase64Encoded': False}
+
+    # ── CASHBACK CLAIM ──
+    if action == 'cashback' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        cashback = float(user[7])
+        if cashback <= 0:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Нет доступного кешбэка'}), 'isBase64Encoded': False}
+
+        cur.execute("""
+            UPDATE users
+            SET balance = balance + %s,
+                cashback_available = 0,
+                cashback_claimed_at = NOW(),
+                updated_at = NOW()
+            WHERE id = %s RETURNING balance
+        """, (cashback, user[0]))
+        new_balance = float(cur.fetchone()[0])
+
+        cur.execute("""
+            INSERT INTO cashback_history (user_id, amount, period_start, period_end, losses, vip_level, pct)
+            VALUES (%s, %s, NOW() - INTERVAL '7 days', NOW(), %s, %s, %s)
+        """, (user[0], cashback, cashback, user[5], calc_vip(float(user[6]))['cashback_pct']))
+
+        conn.commit(); cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'success': True,
+            'cashback': cashback,
+            'new_balance': new_balance,
+        }), 'isBase64Encoded': False}
+
+    # ── VIP STATUS ──
+    if action == 'vip' and http_method == 'GET':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        cur.execute("""
+            SELECT amount, vip_level, pct, created_at FROM cashback_history
+            WHERE user_id = %s ORDER BY created_at DESC LIMIT 10
+        """, (user[0],))
+        history = [{'amount': float(r[0]), 'vip_level': r[1], 'pct': float(r[2]),
+                    'created_at': r[3].isoformat()} for r in cur.fetchall()]
+        cur.close(); conn.close()
+
+        vip_info = user_to_dict(user)
+        vip_info['cashback_history'] = history
+        vip_info['all_levels'] = VIP_LEVELS
+        return {'statusCode': 200, 'headers': HEADERS,
+                'body': json.dumps(vip_info), 'isBase64Encoded': False}
 
     cur.close(); conn.close()
     return {'statusCode': 400, 'headers': HEADERS,
