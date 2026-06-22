@@ -450,6 +450,33 @@ function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string)
 
   const finalAmount = customAmount ? parseInt(customAmount) || 0 : amount;
 
+  const [promoCode, setPromoCode] = useState('');
+  const [promoLoading, setPromoLoading] = useState(false);
+  const [promoSuccess, setPromoSuccess] = useState('');
+  const [promoError, setPromoError] = useState('');
+
+  const activatePromo = async () => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!token) { setPromoError('Войдите в аккаунт'); return; }
+    if (!promoCode.trim()) { setPromoError('Введите промокод'); return; }
+    setPromoLoading(true); setPromoError(''); setPromoSuccess('');
+    try {
+      const res = await fetch(`${AUTH_API}?action=promo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+        body: JSON.stringify({ code: promoCode.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setPromoError(data.error || 'Ошибка'); }
+      else {
+        setPromoSuccess(`+${data.bonus_amount.toLocaleString('ru')} ₽ зачислено на баланс!`);
+        onBalanceChange(0);
+        setPromoCode('');
+      }
+    } catch { setPromoError('Ошибка сети'); }
+    finally { setPromoLoading(false); }
+  };
+
   const { createPayment, isLoading } = useRobokassa({
     apiUrl: ROBOKASSA_API,
     onError: (err) => toast.error('Ошибка создания платежа: ' + err.message),
@@ -874,7 +901,35 @@ function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string)
           </button>
         ))}
       </div>
-      <div className="animate-float-up glass rounded-xl p-3 flex items-center gap-2 text-xs text-muted-foreground" style={{ animationDelay: '280ms' }}>
+      <div className="animate-float-up space-y-2" style={{ animationDelay: '280ms' }}>
+        <p className="text-xs text-muted-foreground uppercase tracking-wider px-1">Промокод</p>
+        {promoSuccess ? (
+          <div className="glass rounded-2xl p-4 flex items-center gap-3 border border-emerald-500/30 bg-emerald-500/5">
+            <Icon name="CheckCircle" size={20} className="text-emerald-400 shrink-0" />
+            <span className="text-sm font-semibold text-emerald-400">{promoSuccess}</span>
+          </div>
+        ) : (
+          <div className="glass rounded-2xl p-3 flex gap-2">
+            <input
+              value={promoCode}
+              onChange={e => { setPromoCode(e.target.value.toUpperCase()); setPromoError(''); }}
+              onKeyDown={e => e.key === 'Enter' && activatePromo()}
+              placeholder="Введите промокод"
+              className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground/50 uppercase tracking-wider"
+            />
+            <button
+              onClick={activatePromo}
+              disabled={promoLoading || !promoCode.trim()}
+              className="shrink-0 gold-gradient text-background text-xs font-bold px-4 py-2 rounded-xl disabled:opacity-50"
+            >
+              {promoLoading ? <Icon name="Loader" size={14} className="animate-spin" /> : 'Активировать'}
+            </button>
+          </div>
+        )}
+        {promoError && <p className="text-xs text-red-400 px-1">{promoError}</p>}
+      </div>
+
+      <div className="animate-float-up glass rounded-xl p-3 flex items-center gap-2 text-xs text-muted-foreground" style={{ animationDelay: '340ms' }}>
         <Icon name="ShieldCheck" size={14} className="text-gold shrink-0" />
         Все платежи защищены. Данные не передаются третьим лицам.
       </div>
@@ -2000,7 +2055,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
   const [password, setPassword] = useState('');
   const [authed, setAuthed] = useState(false);
   const [authError, setAuthError] = useState('');
-  const [tab, setTab] = useState<'withdrawals' | 'orders' | 'top'>('withdrawals');
+  const [tab, setTab] = useState<'withdrawals' | 'orders' | 'top' | 'promos'>('withdrawals');
   const [topDepositors, setTopDepositors] = useState<{ rank: number; user_id: number; username: string; email: string; deposits_count: number; total_deposited: number; last_deposit: string | null; balance: number }[]>([]);
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -2012,6 +2067,55 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
   const [updating, setUpdating] = useState<number | null>(null);
   const [selected, setSelected] = useState<Withdrawal | null>(null);
   const passwordRef = useRef('');
+
+  // Промокоды
+  const [promos, setPromos] = useState<{id:number;code:string;bonus_amount:number;max_uses:number|null;uses_count:number;is_active:boolean;created_at:string;expires_at:string|null}[]>([]);
+  const [promoForm, setPromoForm] = useState({ code: '', bonus_amount: '', max_uses: '', expires_at: '' });
+  const [promoSaving, setPromoSaving] = useState(false);
+  const [promoError, setPromoError] = useState('');
+
+  const fetchPromos = useCallback(async (pwd: string) => {
+    const res = await fetch(`${ADMIN_API}?type=promos`, { headers: { 'X-Admin-Password': pwd } });
+    if (res.ok) { const d = await res.json(); setPromos(d.promos || []); }
+  }, []);
+
+  const createPromo = async () => {
+    if (!promoForm.code || !promoForm.bonus_amount) { setPromoError('Укажите код и сумму'); return; }
+    setPromoSaving(true); setPromoError('');
+    const res = await fetch(ADMIN_API, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Password': passwordRef.current },
+      body: JSON.stringify({
+        code: promoForm.code.trim().toUpperCase(),
+        bonus_amount: parseFloat(promoForm.bonus_amount),
+        max_uses: promoForm.max_uses ? parseInt(promoForm.max_uses) : null,
+        expires_at: promoForm.expires_at || null,
+      }),
+    });
+    const d = await res.json();
+    if (!res.ok) { setPromoError(d.error || 'Ошибка'); }
+    else { setPromoForm({ code: '', bonus_amount: '', max_uses: '', expires_at: '' }); fetchPromos(passwordRef.current); }
+    setPromoSaving(false);
+  };
+
+  const togglePromo = async (id: number, is_active: boolean) => {
+    await fetch(ADMIN_API, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Password': passwordRef.current },
+      body: JSON.stringify({ id, is_active }),
+    });
+    fetchPromos(passwordRef.current);
+  };
+
+  const deletePromo = async (id: number) => {
+    if (!confirm('Удалить промокод?')) return;
+    await fetch(ADMIN_API, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Password': passwordRef.current },
+      body: JSON.stringify({ id }),
+    });
+    fetchPromos(passwordRef.current);
+  };
 
   const fetchStats = useCallback(async (pwd: string) => {
     const res = await fetch(`${ADMIN_API}?type=stats`, { headers: { 'X-Admin-Password': pwd } });
@@ -2067,17 +2171,19 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       fetchStats(password);
       fetchChart(password, 14);
       fetchTopDepositors(password);
+      fetchPromos(password);
     } finally {
       setLoading(false);
     }
   };
 
-  const switchTab = (t: 'withdrawals' | 'orders' | 'top') => {
+  const switchTab = (t: 'withdrawals' | 'orders' | 'top' | 'promos') => {
     setTab(t);
     setFilter('');
     setSelected(null);
-    if (t !== 'top') fetchData(passwordRef.current, t);
+    if (t === 'withdrawals' || t === 'orders') fetchData(passwordRef.current, t);
     if (t === 'top') fetchTopDepositors(passwordRef.current);
+    if (t === 'promos') fetchPromos(passwordRef.current);
   };
 
   // Запрос разрешения на push-уведомления при входе
@@ -2367,28 +2473,34 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       </div>
 
       {/* Вкладки */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         <button onClick={() => switchTab('withdrawals')}
-          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 transition-all
+          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-1.5 transition-all
             ${tab === 'withdrawals' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
-          <Icon name="ArrowUpFromLine" size={16} /> Выводы
+          <Icon name="ArrowUpFromLine" size={15} /> Выводы
           {withdrawals.length > 0 && <span className="bg-background/20 rounded-full px-1.5 py-0.5 text-xs">{withdrawals.length}</span>}
         </button>
         <button onClick={() => switchTab('orders')}
-          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 transition-all
+          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-1.5 transition-all
             ${tab === 'orders' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
-          <Icon name="ArrowDownToLine" size={16} /> Пополнения
+          <Icon name="ArrowDownToLine" size={15} /> Депо
           {orders.length > 0 && <span className="bg-background/20 rounded-full px-1.5 py-0.5 text-xs">{orders.length}</span>}
         </button>
         <button onClick={() => switchTab('top')}
-          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-2 transition-all
+          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-1.5 transition-all
             ${tab === 'top' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
-          <Icon name="Crown" size={16} /> Топ
+          <Icon name="Crown" size={15} /> Топ
+        </button>
+        <button onClick={() => switchTab('promos')}
+          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-1.5 transition-all
+            ${tab === 'promos' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
+          <Icon name="Ticket" size={15} /> Промо
+          {promos.length > 0 && <span className="bg-background/20 rounded-full px-1.5 py-0.5 text-xs">{promos.length}</span>}
         </button>
       </div>
 
       {/* Итого */}
-      {tab !== 'top' && currentList.length > 0 && (
+      {tab !== 'top' && tab !== 'promos' && currentList.length > 0 && (
         <div className="glass rounded-2xl p-4 flex justify-between items-center">
           <span className="text-sm text-muted-foreground">Сумма ({currentList.length} записей)</span>
           <span className="font-display font-bold gold-text text-lg">{totalAmount.toLocaleString('ru')} ₽</span>
@@ -2396,7 +2508,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       )}
 
       {/* Фильтр */}
-      {tab !== 'top' && <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+      {tab !== 'top' && tab !== 'promos' && <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
         {[{ key: '', label: 'Все' }, ...Object.entries(filterMeta).map(([k, v]) => ({ key: k, label: v.label }))].map(f => (
           <button key={f.key} onClick={() => applyFilter(f.key)}
             className={`shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all
@@ -2406,11 +2518,11 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
         ))}
       </div>}
 
-      {loading && tab !== 'top' ? (
+      {loading && tab !== 'top' && tab !== 'promos' ? (
         <div className="flex justify-center py-12 text-gold">
           <Icon name="Loader" size={28} className="animate-spin" />
         </div>
-      ) : !loading && tab !== 'top' && currentList.length === 0 ? (
+      ) : !loading && tab !== 'top' && tab !== 'promos' && currentList.length === 0 ? (
         <div className="glass rounded-2xl p-10 text-center text-muted-foreground text-sm">
           Записей нет
         </div>
@@ -2494,6 +2606,57 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
                     <span className="text-xs text-muted-foreground/50">{new Date(p.last_deposit).toLocaleDateString('ru')}</span>
                   )}
                 </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : tab === 'promos' ? (
+        <div className="space-y-4">
+          {/* Форма создания */}
+          <div className="glass rounded-2xl p-4 space-y-3">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider">Новый промокод</p>
+            <div className="grid grid-cols-2 gap-2">
+              <input value={promoForm.code} onChange={e => setPromoForm(f => ({ ...f, code: e.target.value.toUpperCase() }))}
+                placeholder="Код (напр. BONUS100)" className={inputCls} />
+              <input value={promoForm.bonus_amount} onChange={e => setPromoForm(f => ({ ...f, bonus_amount: e.target.value }))}
+                placeholder="Сумма ₽" type="number" min="1" className={inputCls} />
+              <input value={promoForm.max_uses} onChange={e => setPromoForm(f => ({ ...f, max_uses: e.target.value }))}
+                placeholder="Макс. использований (пусто = ∞)" type="number" min="1" className={inputCls} />
+              <input value={promoForm.expires_at} onChange={e => setPromoForm(f => ({ ...f, expires_at: e.target.value }))}
+                type="datetime-local" className={inputCls} />
+            </div>
+            {promoError && <p className="text-xs text-red-400">{promoError}</p>}
+            <button onClick={createPromo} disabled={promoSaving}
+              className="w-full gold-gradient text-background font-bold h-11 rounded-xl glow-gold disabled:opacity-50 flex items-center justify-center gap-2">
+              {promoSaving ? <Icon name="Loader" size={16} className="animate-spin" /> : <Icon name="Plus" size={16} />}
+              Создать промокод
+            </button>
+          </div>
+
+          {/* Список промокодов */}
+          {promos.length === 0 ? (
+            <div className="glass rounded-2xl p-10 text-center text-muted-foreground text-sm">Промокодов нет</div>
+          ) : promos.map(p => (
+            <div key={p.id} className={`glass rounded-2xl p-4 space-y-2 border ${p.is_active ? 'border-transparent' : 'border-red-500/20 opacity-60'}`}>
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-display font-bold tracking-widest text-lg gold-text">{p.code}</span>
+                <span className="font-display font-bold text-emerald-400">+{p.bonus_amount.toLocaleString('ru')} ₽</span>
+              </div>
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>Использований: {p.uses_count}{p.max_uses ? ` / ${p.max_uses}` : ' / ∞'}</span>
+                {p.expires_at && <span>До: {new Date(p.expires_at).toLocaleDateString('ru')}</span>}
+              </div>
+              <div className="flex gap-2 pt-1">
+                <button onClick={() => togglePromo(p.id, !p.is_active)}
+                  className={`flex-1 text-xs font-semibold h-9 rounded-xl transition-all flex items-center justify-center gap-1.5
+                    ${p.is_active ? 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/25' : 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25'}`}>
+                  <Icon name={p.is_active ? 'PauseCircle' : 'PlayCircle'} size={14} />
+                  {p.is_active ? 'Деактивировать' : 'Активировать'}
+                </button>
+                <button onClick={() => deletePromo(p.id)}
+                  className="w-9 h-9 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 flex items-center justify-center transition-all">
+                  <Icon name="Trash2" size={14} />
+                </button>
               </div>
             </div>
           ))}

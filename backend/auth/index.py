@@ -472,6 +472,72 @@ def handler(event: dict, context) -> dict:
             'my_profit': float(my_stats[4]) if my_stats else None,
         }), 'isBase64Encoded': False}
 
+    # ── PROMO ACTIVATE ──
+    if action == 'promo' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        code = (body.get('code') or '').strip().upper()
+        if not code:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Введите промокод'}), 'isBase64Encoded': False}
+
+        cur.execute("""
+            SELECT id, bonus_amount, max_uses, uses_count, is_active, expires_at
+            FROM promo_codes WHERE code = %s
+        """, (code,))
+        promo = cur.fetchone()
+        if not promo:
+            cur.close(); conn.close()
+            return {'statusCode': 404, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Промокод не найден'}), 'isBase64Encoded': False}
+
+        promo_id, bonus_amount, max_uses, uses_count, is_active, expires_at = promo
+
+        if not is_active:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Промокод деактивирован'}), 'isBase64Encoded': False}
+
+        if expires_at:
+            cur.execute("SELECT NOW()")
+            if cur.fetchone()[0] > expires_at:
+                cur.close(); conn.close()
+                return {'statusCode': 400, 'headers': HEADERS,
+                        'body': json.dumps({'error': 'Срок действия промокода истёк'}), 'isBase64Encoded': False}
+
+        if max_uses is not None and uses_count >= max_uses:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Промокод исчерпан'}), 'isBase64Encoded': False}
+
+        cur.execute("SELECT id FROM promo_activations WHERE promo_id = %s AND user_id = %s", (promo_id, user[0]))
+        if cur.fetchone():
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Вы уже использовали этот промокод'}), 'isBase64Encoded': False}
+
+        cur.execute("INSERT INTO promo_activations (promo_id, user_id) VALUES (%s, %s)", (promo_id, user[0]))
+        cur.execute("UPDATE promo_codes SET uses_count = uses_count + 1 WHERE id = %s", (promo_id,))
+        cur.execute("UPDATE users SET balance = balance + %s, updated_at = NOW() WHERE id = %s RETURNING balance",
+                    (bonus_amount, user[0]))
+        new_balance = float(cur.fetchone()[0])
+        conn.commit(); cur.close(); conn.close()
+
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'success': True,
+            'bonus_amount': float(bonus_amount),
+            'new_balance': new_balance,
+        }), 'isBase64Encoded': False}
+
     cur.close(); conn.close()
     return {'statusCode': 400, 'headers': HEADERS,
             'body': json.dumps({'error': 'Unknown action'}), 'isBase64Encoded': False}

@@ -6,7 +6,7 @@ from datetime import datetime
 
 HEADERS = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, X-Admin-Password',
     'Content-Type': 'application/json'
 }
@@ -201,6 +201,25 @@ def handler(event: dict, context) -> dict:
             return {'statusCode': 200, 'headers': HEADERS,
                     'body': json.dumps({'orders': orders}), 'isBase64Encoded': False}
 
+        # Промокоды
+        if data_type == 'promos':
+            cur.execute("""
+                SELECT id, code, bonus_amount, max_uses, uses_count, is_active, created_at, expires_at
+                FROM promo_codes ORDER BY created_at DESC
+            """)
+            rows = cur.fetchall()
+            cur.close(); conn.close()
+            promos = []
+            for r in rows:
+                promos.append({
+                    'id': r[0], 'code': r[1], 'bonus_amount': float(r[2]),
+                    'max_uses': r[3], 'uses_count': r[4], 'is_active': r[5],
+                    'created_at': r[6].isoformat() if r[6] else None,
+                    'expires_at': r[7].isoformat() if r[7] else None,
+                })
+            return {'statusCode': 200, 'headers': HEADERS,
+                    'body': json.dumps({'promos': promos}), 'isBase64Encoded': False}
+
         # Выводы (withdrawals)
         if status_filter:
             cur.execute("""
@@ -286,6 +305,51 @@ def handler(event: dict, context) -> dict:
         return {'statusCode': 200, 'headers': HEADERS,
                 'body': json.dumps({'success': True, 'status': new_status}),
                 'isBase64Encoded': False}
+
+    # ── PUT: создать/обновить промокод ──
+    if method == 'PUT':
+        payload = json.loads(event.get('body') or '{}')
+        promo_id = payload.get('id')
+
+        if promo_id:
+            # Обновить is_active
+            is_active = payload.get('is_active')
+            cur.execute("UPDATE promo_codes SET is_active = %s WHERE id = %s", (is_active, promo_id))
+            conn.commit(); cur.close(); conn.close()
+            return {'statusCode': 200, 'headers': HEADERS,
+                    'body': json.dumps({'success': True}), 'isBase64Encoded': False}
+        else:
+            # Создать новый
+            code = (payload.get('code') or '').strip().upper()
+            bonus_amount = float(payload.get('bonus_amount') or 0)
+            max_uses = payload.get('max_uses') or None
+            expires_at = payload.get('expires_at') or None
+            if not code or bonus_amount <= 0:
+                cur.close(); conn.close()
+                return {'statusCode': 400, 'headers': HEADERS,
+                        'body': json.dumps({'error': 'Укажите код и сумму бонуса'}), 'isBase64Encoded': False}
+            cur.execute("""
+                INSERT INTO promo_codes (code, bonus_amount, max_uses, expires_at)
+                VALUES (%s, %s, %s, %s) RETURNING id
+            """, (code, bonus_amount, max_uses, expires_at))
+            new_id = cur.fetchone()[0]
+            conn.commit(); cur.close(); conn.close()
+            return {'statusCode': 200, 'headers': HEADERS,
+                    'body': json.dumps({'success': True, 'id': new_id}), 'isBase64Encoded': False}
+
+    # ── DELETE: удалить промокод ──
+    if method == 'DELETE':
+        payload = json.loads(event.get('body') or '{}')
+        promo_id = payload.get('id')
+        if not promo_id:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Укажите id'}), 'isBase64Encoded': False}
+        cur.execute("DELETE FROM promo_activations WHERE promo_id = %s", (promo_id,))
+        cur.execute("DELETE FROM promo_codes WHERE id = %s", (promo_id,))
+        conn.commit(); cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS,
+                'body': json.dumps({'success': True}), 'isBase64Encoded': False}
 
     cur.close()
     conn.close()
