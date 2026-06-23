@@ -963,6 +963,13 @@ type WithdrawStep = 'method' | 'form' | 'confirm' | 'success';
 
 const WITHDRAW_API = 'https://functions.poehali.dev/5264284f-4bd1-4c29-9530-a9fd03734d4d';
 
+const WD_STATUS_META: Record<string, { label: string; color: string; icon: string }> = {
+  pending:    { label: 'На рассмотрении', color: 'text-amber-400',   icon: 'Clock' },
+  processing: { label: 'В обработке',     color: 'text-blue-400',    icon: 'Loader' },
+  paid:       { label: 'Выплачено',        color: 'text-emerald-400', icon: 'CheckCircle' },
+  rejected:   { label: 'Отклонено',        color: 'text-red-400',     icon: 'XCircle' },
+};
+
 function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (m: string) => void }) {
   const [step, setStep] = useState<WithdrawStep>('method');
   const [method, setMethod] = useState<typeof WITHDRAW_METHODS[0] | null>(null);
@@ -972,23 +979,52 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
   const [userEmail, setUserEmail] = useState('');
   const [userTelegram, setUserTelegram] = useState('');
   const [requestNumber, setRequestNumber] = useState('');
+  const [withdrawalId, setWithdrawalId] = useState<number | null>(null);
+  const [wdStatus, setWdStatus] = useState<string>('pending');
   const [loading, setLoading] = useState(false);
+  const pollRef = useRef<number | null>(null);
 
   const parsedAmount = parseInt(amount) || 0;
   const inputCls = 'w-full bg-background/60 border border-gold/20 rounded-xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-foreground placeholder:text-muted-foreground/50';
 
+  // Поллинг статуса заявки каждые 5 секунд
+  useEffect(() => {
+    if (step !== 'success' || !withdrawalId) return;
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+    const poll = async () => {
+      try {
+        const res = await fetch(`${WITHDRAW_API}?withdrawal_id=${withdrawalId}`, {
+          headers: { 'X-Auth-Token': token },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setWdStatus(data.status);
+          if (data.status === 'paid' || data.status === 'rejected') {
+            if (pollRef.current) clearInterval(pollRef.current);
+          }
+        }
+      } catch { /* молча */ }
+    };
+    poll();
+    pollRef.current = window.setInterval(poll, 5000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [step, withdrawalId]);
+
   const reset = () => {
+    if (pollRef.current) clearInterval(pollRef.current);
     setStep('method'); setMethod(null); setAmount(''); setDestination('');
     setUserName(''); setUserEmail(''); setUserTelegram('');
+    setWithdrawalId(null); setWdStatus('pending');
   };
 
   const handleSubmit = async () => {
     if (!method) return;
     setLoading(true);
     try {
+      const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
       const res = await fetch(WITHDRAW_API, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
         body: JSON.stringify({
           method: method.name,
           destination,
@@ -1001,6 +1037,8 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
       const data = await res.json();
       if (res.ok) {
         setRequestNumber(data.request_number);
+        setWithdrawalId(data.withdrawal_id);
+        setWdStatus('pending');
         setStep('success');
       } else {
         toast.error(data.error || 'Ошибка отправки заявки');
@@ -1024,47 +1062,77 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
 
   // ── SUCCESS ──
   if (step === 'success') {
+    const statusMeta = WD_STATUS_META[wdStatus] || WD_STATUS_META.pending;
+    const isPaid = wdStatus === 'paid';
+    const isRejected = wdStatus === 'rejected';
     return (
       <div className="space-y-5">
         <SectionTitle title="Вывод средств" subtitle="Выведи выигрыш" icon="ArrowUpFromLine" />
         <div className="animate-win-pop glass rounded-3xl p-8 flex flex-col items-center gap-4 text-center glow-soft">
-          <div className="w-20 h-20 rounded-full flex items-center justify-center glow-gold"
-            style={{ background: 'linear-gradient(135deg, hsl(var(--emerald)), hsl(158 50% 35%))' }}>
-            <Icon name="Check" size={36} className="text-white" />
+          {/* Иконка статуса */}
+          <div className={`w-20 h-20 rounded-full flex items-center justify-center transition-all duration-500
+            ${isPaid ? 'glow-gold' : isRejected ? '' : 'glow-soft'}`}
+            style={{ background: isPaid
+              ? 'linear-gradient(135deg, hsl(var(--gold)), hsl(40 80% 40%))'
+              : isRejected
+                ? 'linear-gradient(135deg, #ef4444, #991b1b)'
+                : 'linear-gradient(135deg, hsl(var(--emerald)), hsl(158 50% 35%))' }}>
+            <Icon name={isPaid ? 'BadgeCheck' : isRejected ? 'XCircle' : 'Check'} size={36} className="text-white" />
           </div>
+
           <div>
-            <h3 className="font-display text-2xl font-bold text-emerald-400">Заявка создана!</h3>
+            <h3 className={`font-display text-2xl font-bold ${isPaid ? 'gold-text' : isRejected ? 'text-red-400' : 'text-emerald-400'}`}>
+              {isPaid ? 'Выплачено!' : isRejected ? 'Отклонено' : 'Заявка создана!'}
+            </h3>
             <p className="text-muted-foreground text-sm mt-1">
-              {parsedAmount.toLocaleString('ru')} ₽ будут отправлены в течение {method?.time}
+              {isPaid
+                ? `${parsedAmount.toLocaleString('ru')} ₽ отправлены на ${method?.name}`
+                : isRejected
+                  ? 'Обратитесь в поддержку за деталями'
+                  : `${parsedAmount.toLocaleString('ru')} ₽ будут отправлены в течение ${method?.time}`}
             </p>
           </div>
-          <div className="w-full glass rounded-2xl p-4 space-y-2 text-sm">
+
+          {/* Карточка деталей */}
+          <div className="w-full glass rounded-2xl p-4 space-y-2.5 text-sm">
             {requestNumber && (
-              <div className="flex justify-between">
+              <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Заявка</span>
-                <span className="font-mono text-xs">{requestNumber}</span>
+                <span className="font-mono text-xs text-muted-foreground">{requestNumber}</span>
               </div>
             )}
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
               <span className="text-muted-foreground">Метод</span>
               <span className="font-medium">{method?.name}</span>
             </div>
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
               <span className="text-muted-foreground">Реквизиты</span>
               <span className="font-medium font-mono text-xs">{destination.slice(0, 4)}••••{destination.slice(-4)}</span>
             </div>
-            <div className="flex justify-between">
+            <div className="flex justify-between items-center">
               <span className="text-muted-foreground">Сумма</span>
               <span className="font-display font-bold text-emerald-400">{parsedAmount.toLocaleString('ru')} ₽</span>
             </div>
-            <div className="flex justify-between">
+            <div className="w-full h-px bg-white/5" />
+            {/* Живой статус */}
+            <div className="flex justify-between items-center">
               <span className="text-muted-foreground">Статус</span>
-              <span className="text-amber-400 font-medium flex items-center gap-1">
-                <Icon name="Clock" size={13} /> Обработка
+              <span className={`font-semibold flex items-center gap-1.5 ${statusMeta.color}`}>
+                <Icon name={statusMeta.icon} size={14}
+                  className={wdStatus === 'processing' ? 'animate-spin' : ''} />
+                {statusMeta.label}
               </span>
             </div>
+            {!isPaid && !isRejected && (
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground/60 justify-center pt-1">
+                <Icon name="RefreshCw" size={11} className="animate-spin" />
+                Статус обновляется автоматически
+              </div>
+            )}
           </div>
-          <Button onClick={reset} variant="outline" className="w-full border-gold/30 text-gold bg-transparent h-12 font-bold hover:bg-gold/10">
+
+          <Button onClick={reset} variant="outline"
+            className="w-full border-gold/30 text-gold bg-transparent h-12 font-bold hover:bg-gold/10">
             <Icon name="ArrowLeft" size={18} className="mr-2" /> Назад к кассе
           </Button>
         </div>
