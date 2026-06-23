@@ -1468,7 +1468,7 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
             <div
               className="w-20 h-20 rounded-2xl flex items-center justify-center overflow-hidden cursor-pointer select-none"
               style={{ border: `2px solid ${vipColor}66` }}
-              onClick={() => !avatarLoading && fileInputRef.current?.click()}
+              onClick={handleSecretTap}
             >
               {avatarSrc
                 ? <img src={avatarSrc} alt="avatar" className="w-full h-full object-cover" />
