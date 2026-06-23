@@ -769,6 +769,122 @@ def handler(event: dict, context) -> dict:
         return {'statusCode': 200, 'headers': HEADERS,
                 'body': json.dumps({'success': True, 'avatar_url': cdn_url}), 'isBase64Encoded': False}
 
+    # ── SUPPORT: получить/создать чат + сообщения ──
+    if action == 'support-messages' and http_method == 'GET':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        # Найти или создать чат
+        cur.execute("SELECT id, status, unread_user FROM support_chats WHERE user_id = %s ORDER BY id DESC LIMIT 1", (user[0],))
+        chat = cur.fetchone()
+        if not chat:
+            cur.execute("INSERT INTO support_chats (user_id) VALUES (%s) RETURNING id, status, unread_user", (user[0],))
+            chat = cur.fetchone()
+            conn.commit()
+        chat_id, chat_status, unread_user = chat
+
+        # Сбросить счётчик непрочитанных для пользователя
+        cur.execute("UPDATE support_chats SET unread_user = 0 WHERE id = %s", (chat_id,))
+        conn.commit()
+
+        cur.execute("""
+            SELECT id, sender, text, created_at FROM support_messages
+            WHERE chat_id = %s ORDER BY created_at ASC LIMIT 200
+        """, (chat_id,))
+        msgs = [{'id': r[0], 'sender': r[1], 'text': r[2], 'created_at': r[3].isoformat()} for r in cur.fetchall()]
+        cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS,
+                'body': json.dumps({'chat_id': chat_id, 'status': chat_status, 'messages': msgs}), 'isBase64Encoded': False}
+
+    # ── SUPPORT: отправить сообщение от игрока ──
+    if action == 'support-send' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        text = (body.get('text') or '').strip()
+        if not text:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сообщение не может быть пустым'}), 'isBase64Encoded': False}
+        if len(text) > 2000:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сообщение слишком длинное'}), 'isBase64Encoded': False}
+
+        # Найти или создать чат
+        cur.execute("SELECT id FROM support_chats WHERE user_id = %s ORDER BY id DESC LIMIT 1", (user[0],))
+        chat = cur.fetchone()
+        if not chat:
+            cur.execute("INSERT INTO support_chats (user_id) VALUES (%s) RETURNING id", (user[0],))
+            chat = cur.fetchone()
+        chat_id = chat[0]
+
+        cur.execute("""
+            INSERT INTO support_messages (chat_id, sender, text) VALUES (%s, 'user', %s) RETURNING id, created_at
+        """, (chat_id, text))
+        msg = cur.fetchone()
+        cur.execute("""
+            UPDATE support_chats SET unread_admin = unread_admin + 1,
+            last_message_at = NOW(), status = 'open' WHERE id = %s
+        """, (chat_id,))
+        conn.commit(); cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS,
+                'body': json.dumps({'id': msg[0], 'created_at': msg[1].isoformat()}), 'isBase64Encoded': False}
+
+    # ── SUPPORT: проверить новые сообщения (polling) ──
+    if action == 'support-poll' and http_method == 'GET':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        cur.execute("SELECT id, unread_user FROM support_chats WHERE user_id = %s ORDER BY id DESC LIMIT 1", (user[0],))
+        chat = cur.fetchone()
+        if not chat:
+            cur.close(); conn.close()
+            return {'statusCode': 200, 'headers': HEADERS,
+                    'body': json.dumps({'unread': 0, 'messages': []}), 'isBase64Encoded': False}
+
+        chat_id, unread = chat
+        since = params.get('since', '')
+        if since:
+            cur.execute("""
+                SELECT id, sender, text, created_at FROM support_messages
+                WHERE chat_id = %s AND created_at > %s ORDER BY created_at ASC
+            """, (chat_id, since))
+        else:
+            cur.execute("""
+                SELECT id, sender, text, created_at FROM support_messages
+                WHERE chat_id = %s ORDER BY created_at ASC LIMIT 200
+            """, (chat_id,))
+
+        msgs = [{'id': r[0], 'sender': r[1], 'text': r[2], 'created_at': r[3].isoformat()} for r in cur.fetchall()]
+        if msgs:
+            cur.execute("UPDATE support_chats SET unread_user = 0 WHERE id = %s", (chat_id,))
+            conn.commit()
+        cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS,
+                'body': json.dumps({'unread': unread, 'messages': msgs}), 'isBase64Encoded': False}
+
     cur.close(); conn.close()
     return {'statusCode': 400, 'headers': HEADERS,
             'body': json.dumps({'error': 'Unknown action'}), 'isBase64Encoded': False}

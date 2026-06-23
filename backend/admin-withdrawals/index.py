@@ -351,6 +351,85 @@ def handler(event: dict, context) -> dict:
         return {'statusCode': 200, 'headers': HEADERS,
                 'body': json.dumps({'success': True}), 'isBase64Encoded': False}
 
+    # ── GET type=support-chats: список всех чатов ──
+    if method == 'GET' and (event.get('queryStringParameters') or {}).get('type') == 'support-chats':
+        cur.execute("""
+            SELECT sc.id, sc.user_id, u.username, u.email, sc.status,
+                   sc.unread_admin, sc.last_message_at,
+                   (SELECT text FROM support_messages sm WHERE sm.chat_id = sc.id ORDER BY sm.created_at DESC LIMIT 1) as last_text
+            FROM support_chats sc
+            JOIN users u ON u.id = sc.user_id
+            ORDER BY sc.last_message_at DESC
+            LIMIT 100
+        """)
+        chats = []
+        for r in cur.fetchall():
+            chats.append({
+                'id': r[0], 'user_id': r[1], 'username': r[2] or '', 'email': r[3] or '',
+                'status': r[4], 'unread_admin': r[5],
+                'last_message_at': r[6].isoformat() if r[6] else None,
+                'last_text': r[7] or '',
+            })
+        cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({'chats': chats}), 'isBase64Encoded': False}
+
+    # ── GET type=support-messages&chat_id=N: сообщения чата ──
+    if method == 'GET' and (event.get('queryStringParameters') or {}).get('type') == 'support-messages':
+        chat_id = (event.get('queryStringParameters') or {}).get('chat_id')
+        if not chat_id:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS, 'body': json.dumps({'error': 'chat_id required'}), 'isBase64Encoded': False}
+        cur.execute("""
+            SELECT sc.id, sc.user_id, u.username, u.email, sc.status, sc.unread_admin
+            FROM support_chats sc JOIN users u ON u.id = sc.user_id WHERE sc.id = %s
+        """, (chat_id,))
+        chat = cur.fetchone()
+        if not chat:
+            cur.close(); conn.close()
+            return {'statusCode': 404, 'headers': HEADERS, 'body': json.dumps({'error': 'Chat not found'}), 'isBase64Encoded': False}
+        cur.execute("""
+            SELECT id, sender, text, created_at FROM support_messages
+            WHERE chat_id = %s ORDER BY created_at ASC
+        """, (chat_id,))
+        msgs = [{'id': r[0], 'sender': r[1], 'text': r[2], 'created_at': r[3].isoformat()} for r in cur.fetchall()]
+        # Сбросить unread_admin
+        cur.execute("UPDATE support_chats SET unread_admin = 0 WHERE id = %s", (chat_id,))
+        conn.commit(); cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'chat': {'id': chat[0], 'user_id': chat[1], 'username': chat[2], 'email': chat[3], 'status': chat[4]},
+            'messages': msgs
+        }), 'isBase64Encoded': False}
+
+    # ── POST type=support-reply: ответ администратора ──
+    if method == 'POST':
+        payload = json.loads(event.get('body') or '{}')
+        if payload.get('type') == 'support-reply':
+            chat_id = payload.get('chat_id')
+            text = (payload.get('text') or '').strip()
+            if not chat_id or not text:
+                cur.close(); conn.close()
+                return {'statusCode': 400, 'headers': HEADERS, 'body': json.dumps({'error': 'chat_id и text обязательны'}), 'isBase64Encoded': False}
+            cur.execute("""
+                INSERT INTO support_messages (chat_id, sender, text) VALUES (%s, 'admin', %s) RETURNING id, created_at
+            """, (chat_id, text))
+            msg = cur.fetchone()
+            cur.execute("""
+                UPDATE support_chats SET unread_user = unread_user + 1,
+                last_message_at = NOW(), status = 'answered' WHERE id = %s
+            """, (chat_id,))
+            conn.commit(); cur.close(); conn.close()
+            return {'statusCode': 200, 'headers': HEADERS,
+                    'body': json.dumps({'success': True, 'id': msg[0], 'created_at': msg[1].isoformat()}), 'isBase64Encoded': False}
+
+    # ── POST type=support-close: закрыть чат ──
+    if method == 'POST':
+        payload = json.loads(event.get('body') or '{}')
+        if payload.get('type') == 'support-close':
+            chat_id = payload.get('chat_id')
+            cur.execute("UPDATE support_chats SET status = 'closed' WHERE id = %s", (chat_id,))
+            conn.commit(); cur.close(); conn.close()
+            return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({'success': True}), 'isBase64Encoded': False}
+
     cur.close()
     conn.close()
     return {'statusCode': 405, 'headers': HEADERS, 'body': json.dumps({'error': 'Method not allowed'}), 'isBase64Encoded': False}
