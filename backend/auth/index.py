@@ -3,7 +3,9 @@ import os
 import hashlib
 import secrets
 import random
+import base64
 import psycopg2
+import boto3
 
 HEADERS = {
     'Access-Control-Allow-Origin': '*',
@@ -45,10 +47,19 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 
+def get_s3():
+    return boto3.client(
+        's3',
+        endpoint_url='https://bucket.poehali.dev',
+        aws_access_key_id=os.environ['AWS_ACCESS_KEY_ID'],
+        aws_secret_access_key=os.environ['AWS_SECRET_ACCESS_KEY'],
+    )
+
+
 def get_user_by_token(cur, token: str):
     cur.execute("""
         SELECT u.id, u.email, u.username, u.balance, u.referral_code,
-               u.vip_level, u.total_deposited, u.cashback_available
+               u.vip_level, u.total_deposited, u.cashback_available, u.avatar_url
         FROM sessions s JOIN users u ON s.user_id = u.id
         WHERE s.token = %s AND s.expires_at > NOW()
     """, (token,))
@@ -71,6 +82,7 @@ def user_to_dict(u) -> dict:
         'next_vip_label': nxt['label'] if nxt else None,
         'next_vip_min': nxt['min'] if nxt else None,
         'next_vip_emoji': nxt['emoji'] if nxt else None,
+        'avatar_url': u[8],
     }
 
 
@@ -687,6 +699,75 @@ def handler(event: dict, context) -> dict:
         vip_info['all_levels'] = VIP_LEVELS
         return {'statusCode': 200, 'headers': HEADERS,
                 'body': json.dumps(vip_info), 'isBase64Encoded': False}
+
+    # ── UPDATE PROFILE (смена никнейма) ──
+    if action == 'update-profile' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        new_username = (body.get('username') or '').strip()
+        if not new_username:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Никнейм не может быть пустым'}), 'isBase64Encoded': False}
+        if len(new_username) > 32:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Никнейм не более 32 символов'}), 'isBase64Encoded': False}
+
+        cur.execute("""
+            UPDATE users SET username = %s, updated_at = NOW() WHERE id = %s
+        """, (new_username, user[0]))
+        conn.commit(); cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS,
+                'body': json.dumps({'success': True, 'username': new_username}), 'isBase64Encoded': False}
+
+    # ── UPLOAD AVATAR ──
+    if action == 'upload-avatar' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        image_b64 = body.get('image_b64', '')
+        content_type = body.get('content_type', 'image/jpeg')
+        if not image_b64:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Нет изображения'}), 'isBase64Encoded': False}
+
+        # Декодируем base64 и ограничиваем размер (макс 2 МБ)
+        if ',' in image_b64:
+            image_b64 = image_b64.split(',', 1)[1]
+        img_bytes = base64.b64decode(image_b64)
+        if len(img_bytes) > 2 * 1024 * 1024:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Размер фото не более 2 МБ'}), 'isBase64Encoded': False}
+
+        ext = 'jpg' if 'jpeg' in content_type else content_type.split('/')[-1]
+        key = f'avatars/user_{user[0]}.{ext}'
+        s3 = get_s3()
+        s3.put_object(Bucket='files', Key=key, Body=img_bytes, ContentType=content_type)
+
+        cdn_url = f"https://cdn.poehali.dev/projects/{os.environ['AWS_ACCESS_KEY_ID']}/bucket/{key}"
+
+        cur.execute("UPDATE users SET avatar_url = %s, updated_at = NOW() WHERE id = %s", (cdn_url, user[0]))
+        conn.commit(); cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS,
+                'body': json.dumps({'success': True, 'avatar_url': cdn_url}), 'isBase64Encoded': False}
 
     cur.close(); conn.close()
     return {'statusCode': 400, 'headers': HEADERS,

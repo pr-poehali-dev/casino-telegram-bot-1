@@ -43,6 +43,7 @@ interface AuthUser {
   vip_level?: string; vip_label?: string; vip_emoji?: string; vip_cashback_pct?: number;
   total_deposited?: number; cashback_available?: number;
   next_vip_level?: string; next_vip_label?: string; next_vip_min?: number; next_vip_emoji?: string;
+  avatar_url?: string | null;
 }
 
 export default function Index() {
@@ -126,6 +127,10 @@ export default function Index() {
   }, []);
 
   const notify = (msg: string) => toast(msg, { description: 'Эта функция настраивается отдельно — напишите детали.' });
+
+  const handleUserUpdate = (updates: Partial<AuthUser>) => {
+    setUser(prev => prev ? { ...prev, ...updates } : prev);
+  };
 
   const openGame = (id: string) => {
     setActiveGame(id);
@@ -233,7 +238,7 @@ export default function Index() {
               {section === 'deposit' && <DepositView notify={notify} onBalanceChange={syncBalance} />}
               {section === 'withdraw' && <WithdrawView balance={balance} notify={notify} />}
               {section === 'stats' && <StatsView />}
-              {section === 'profile' && <ProfileView setSection={setSection} notify={notify} user={user} onLogout={handleLogout} onBalanceChange={syncBalance} />}
+              {section === 'profile' && <ProfileView setSection={setSection} notify={notify} user={user} onLogout={handleLogout} onBalanceChange={syncBalance} onUserUpdate={handleUserUpdate} />}
               {section === 'support' && <SupportView notify={notify} />}
               {section === 'admin' && <AdminView onPendingChange={setPendingWithdrawals} />}
               {section === 'referral' && <ReferralView user={user} onBack={() => setSection('profile')} />}
@@ -1328,14 +1333,26 @@ const VIP_COLORS: Record<string, string> = {
 };
 const VIP_LEVELS_ORDER = ['none', 'bronze', 'silver', 'gold', 'platinum'];
 
-function ProfileView({ setSection, notify, user, onLogout, onBalanceChange }: {
+function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUserUpdate }: {
   setSection: (s: Section) => void; notify: (m: string) => void;
   user: AuthUser | null; onLogout: () => void; onBalanceChange: (d: number) => void;
+  onUserUpdate: (u: Partial<AuthUser>) => void;
 }) {
   const [tapCount, setTapCount] = useState(0);
   const tapTimer = useRef<number | null>(null);
   const [cashbackLoading, setCashbackLoading] = useState(false);
   const [localCashback, setLocalCashback] = useState<number | null>(null);
+
+  // Аватар
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [avatarLoading, setAvatarLoading] = useState(false);
+  const [localAvatar, setLocalAvatar] = useState<string | null>(null);
+
+  // Никнейм
+  const [editingName, setEditingName] = useState(false);
+  const [nameValue, setNameValue] = useState('');
+  const [nameSaving, setNameSaving] = useState(false);
+  const [nameError, setNameError] = useState('');
 
   const cashbackAvailable = localCashback ?? (user?.cashback_available || 0);
   const vipLevel = user?.vip_level || 'none';
@@ -1344,6 +1361,7 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange }: {
   const nextMin = user?.next_vip_min || 0;
   const progressPct = vipLevel === 'platinum' ? 100
     : nextMin > 0 ? Math.min(100, Math.round((totalDeposited / nextMin) * 100)) : 0;
+  const avatarSrc = localAvatar || user?.avatar_url || null;
 
   const handleSecretTap = () => {
     const next = tapCount + 1;
@@ -1351,6 +1369,64 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange }: {
     if (tapTimer.current) clearTimeout(tapTimer.current);
     if (next >= 5) { setTapCount(0); setSection('admin'); return; }
     tapTimer.current = window.setTimeout(() => setTapCount(0), 1500);
+  };
+
+  const handleAvatarPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2 * 1024 * 1024) { toast.error('Фото не более 2 МБ'); return; }
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      const b64 = ev.target?.result as string;
+      setLocalAvatar(b64);
+      setAvatarLoading(true);
+      const token = localStorage.getItem(AUTH_TOKEN_KEY);
+      if (!token) { setAvatarLoading(false); return; }
+      const res = await fetch(`${AUTH_API}?action=upload-avatar`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+        body: JSON.stringify({ image_b64: b64, content_type: file.type }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setLocalAvatar(data.avatar_url);
+        onUserUpdate({ avatar_url: data.avatar_url });
+        toast.success('Аватар обновлён!');
+      } else {
+        toast.error(data.error || 'Ошибка загрузки');
+        setLocalAvatar(null);
+      }
+      setAvatarLoading(false);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const startEditName = () => {
+    setNameValue(user?.username || '');
+    setNameError('');
+    setEditingName(true);
+  };
+
+  const saveName = async () => {
+    const trimmed = nameValue.trim();
+    if (!trimmed) { setNameError('Никнейм не может быть пустым'); return; }
+    if (trimmed.length > 32) { setNameError('Не более 32 символов'); return; }
+    setNameSaving(true); setNameError('');
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    const res = await fetch(`${AUTH_API}?action=update-profile`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token! },
+      body: JSON.stringify({ username: trimmed }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      onUserUpdate({ username: trimmed });
+      setEditingName(false);
+      toast.success('Никнейм изменён!');
+    } else {
+      setNameError(data.error || 'Ошибка');
+    }
+    setNameSaving(false);
   };
 
   const claimCashback = async () => {
@@ -1378,7 +1454,6 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange }: {
     { name: 'Пригласить друга', icon: 'UserPlus', action: () => setSection('referral'), highlight: true },
     { name: 'Статистика', icon: 'TrendingUp', action: () => setSection('stats') },
     { name: 'Поддержка', icon: 'Headphones', action: () => setSection('support') },
-    { name: 'Настройки', icon: 'Settings', action: () => notify('Открываю настройки') },
     { name: 'Выйти из аккаунта', icon: 'LogOut', action: onLogout, danger: true },
   ];
 
@@ -1388,13 +1463,65 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange }: {
       <div className="animate-float-up glass rounded-3xl p-6 text-center relative overflow-hidden glow-soft">
         <div className="absolute inset-x-0 top-0 h-24 opacity-20" style={{ background: `linear-gradient(to bottom, ${vipColor}, transparent)` }} />
         <div className="relative">
-          <div className="w-20 h-20 rounded-2xl mx-auto flex items-center justify-center glow-gold mb-3 cursor-pointer select-none"
-            style={{ background: `linear-gradient(135deg, ${vipColor}cc, ${vipColor}44)`, border: `2px solid ${vipColor}66` }}
-            onClick={handleSecretTap}>
-            <Icon name="User" size={36} className="text-background" />
+          {/* Аватар */}
+          <div className="relative w-20 h-20 mx-auto mb-3">
+            <div
+              className="w-20 h-20 rounded-2xl flex items-center justify-center overflow-hidden cursor-pointer select-none"
+              style={{ border: `2px solid ${vipColor}66` }}
+              onClick={() => !avatarLoading && fileInputRef.current?.click()}
+            >
+              {avatarSrc
+                ? <img src={avatarSrc} alt="avatar" className="w-full h-full object-cover" />
+                : <div className="w-full h-full flex items-center justify-center" style={{ background: `linear-gradient(135deg, ${vipColor}cc, ${vipColor}44)` }}>
+                    <Icon name="User" size={36} className="text-background" />
+                  </div>
+              }
+              {avatarLoading && (
+                <div className="absolute inset-0 bg-black/50 rounded-2xl flex items-center justify-center">
+                  <Icon name="Loader" size={20} className="animate-spin text-white" />
+                </div>
+              )}
+            </div>
+            {/* Кнопка смены фото */}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="absolute -bottom-1.5 -right-1.5 w-7 h-7 rounded-xl flex items-center justify-center shadow-lg"
+              style={{ background: vipColor }}
+            >
+              <Icon name="Camera" size={13} className="text-background" />
+            </button>
+            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleAvatarPick} />
           </div>
-          <h2 className="font-display text-xl font-bold">{user?.username || 'Игрок'}</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">{user?.email}</p>
+
+          {/* Никнейм */}
+          {editingName ? (
+            <div className="flex items-center justify-center gap-2 mt-1 mb-1">
+              <input
+                autoFocus
+                value={nameValue}
+                onChange={e => { setNameValue(e.target.value); setNameError(''); }}
+                onKeyDown={e => { if (e.key === 'Enter') saveName(); if (e.key === 'Escape') setEditingName(false); }}
+                maxLength={32}
+                className="bg-background/60 border border-gold/30 rounded-xl px-3 py-1.5 text-center font-display font-bold text-lg outline-none focus:border-gold/70 w-44"
+              />
+              <button onClick={saveName} disabled={nameSaving}
+                className="w-8 h-8 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center hover:bg-emerald-500/30 transition-all disabled:opacity-50">
+                {nameSaving ? <Icon name="Loader" size={14} className="animate-spin" /> : <Icon name="Check" size={14} />}
+              </button>
+              <button onClick={() => setEditingName(false)}
+                className="w-8 h-8 rounded-xl bg-red-500/10 text-red-400 flex items-center justify-center hover:bg-red-500/20 transition-all">
+                <Icon name="X" size={14} />
+              </button>
+            </div>
+          ) : (
+            <button onClick={startEditName} className="group flex items-center justify-center gap-1.5 mx-auto mt-1 mb-0.5">
+              <h2 className="font-display text-xl font-bold group-hover:text-gold transition-colors">{user?.username || 'Игрок'}</h2>
+              <Icon name="Pencil" size={13} className="text-muted-foreground/50 group-hover:text-gold transition-colors" />
+            </button>
+          )}
+          {nameError && <p className="text-xs text-red-400 mb-1">{nameError}</p>}
+
+          <p className="text-xs text-muted-foreground">{user?.email}</p>
           <span className="inline-flex items-center gap-1.5 mt-2 text-xs font-bold px-3 py-1 rounded-full"
             style={{ color: vipColor, background: `${vipColor}18`, border: `1px solid ${vipColor}44` }}>
             {user?.vip_emoji || '⬜'} {user?.vip_label || 'Нет уровня'}
