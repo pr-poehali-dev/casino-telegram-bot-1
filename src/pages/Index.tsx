@@ -1620,30 +1620,164 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
   );
 }
 
-function SupportView({ notify }: { notify: (m: string) => void }) {
-  const faqs = [
-    { q: 'Как пополнить баланс?', icon: 'Wallet' },
-    { q: 'Сколько идёт вывод?', icon: 'Clock' },
-    { q: 'Не пришёл выигрыш', icon: 'CircleAlert' },
-  ];
-  return (
-    <div className="space-y-5">
-      <SectionTitle title="Поддержка" subtitle="Мы на связи 24/7" icon="Headphones" />
-      <button onClick={() => notify('Открываю чат с поддержкой')} className="animate-float-up w-full gold-gradient text-background rounded-2xl p-5 flex items-center gap-4 glow-gold">
-        <Icon name="MessageCircle" size={28} />
-        <div className="text-left">
-          <div className="font-display font-bold text-lg">Написать в чат</div>
-          <div className="text-sm opacity-80">Ответим в течение минуты</div>
+interface SupportMessage { id: number; sender: 'user' | 'admin'; text: string; created_at: string; }
+
+function SupportView({ notify: _notify }: { notify: (m: string) => void }) {
+  const [messages, setMessages] = useState<SupportMessage[]>([]);
+  const [chatId, setChatId] = useState<number | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [status, setStatus] = useState('open');
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const pollRef = useRef<number | null>(null);
+  const lastMsgRef = useRef<string>('');
+
+  const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+
+  const loadMessages = async () => {
+    if (!token) { setLoading(false); return; }
+    const res = await fetch(`${AUTH_API}?action=support-messages`, {
+      headers: { 'X-Auth-Token': token },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      setMessages(data.messages || []);
+      setChatId(data.chat_id);
+      setStatus(data.status);
+      if (data.messages?.length) lastMsgRef.current = data.messages[data.messages.length - 1].created_at;
+    }
+    setLoading(false);
+  };
+
+  const pollNew = async () => {
+    if (!token || !lastMsgRef.current) return;
+    const res = await fetch(`${AUTH_API}?action=support-poll&since=${encodeURIComponent(lastMsgRef.current)}`, {
+      headers: { 'X-Auth-Token': token },
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.messages?.length) {
+        setMessages(prev => {
+          const ids = new Set(prev.map(m => m.id));
+          const fresh = data.messages.filter((m: SupportMessage) => !ids.has(m.id));
+          if (!fresh.length) return prev;
+          lastMsgRef.current = fresh[fresh.length - 1].created_at;
+          return [...prev, ...fresh];
+        });
+      }
+    }
+  };
+
+  useEffect(() => {
+    loadMessages();
+    pollRef.current = window.setInterval(pollNew, 4000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, []);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const send = async () => {
+    const t = text.trim();
+    if (!t || sending || !token) return;
+    setSending(true);
+    const optimistic: SupportMessage = { id: Date.now(), sender: 'user', text: t, created_at: new Date().toISOString() };
+    setMessages(prev => [...prev, optimistic]);
+    setText('');
+    const res = await fetch(`${AUTH_API}?action=support-send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+      body: JSON.stringify({ text: t }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      lastMsgRef.current = data.created_at;
+      setMessages(prev => prev.map(m => m.id === optimistic.id ? { ...m, id: data.id, created_at: data.created_at } : m));
+    }
+    setSending(false);
+  };
+
+  const fmt = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
+  };
+
+  if (!token) {
+    return (
+      <div className="space-y-5">
+        <SectionTitle title="Поддержка" subtitle="Мы на связи 24/7" icon="Headphones" />
+        <div className="glass rounded-2xl p-8 text-center text-muted-foreground">
+          Войдите в аккаунт чтобы написать в поддержку
         </div>
-      </button>
-      <div className="space-y-2.5">
-        {faqs.map((f, i) => (
-          <button key={f.q} onClick={() => notify(f.q)} className="animate-float-up w-full glass rounded-2xl p-4 flex items-center gap-3 hover-lift" style={{ animationDelay: `${i * 60}ms` }}>
-            <Icon name={f.icon} size={20} className="text-gold" />
-            <span className="font-medium flex-1 text-left">{f.q}</span>
-            <Icon name="ChevronRight" size={18} className="text-muted-foreground" />
-          </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col h-[calc(100vh-10rem)]">
+      {/* Заголовок */}
+      <div className="animate-float-up flex items-center gap-3 mb-3">
+        <div className="w-10 h-10 rounded-2xl gold-gradient flex items-center justify-center glow-gold shrink-0">
+          <Icon name="Headphones" size={20} className="text-background" />
+        </div>
+        <div className="flex-1">
+          <h2 className="font-display font-bold text-lg">Поддержка</h2>
+          <p className="text-xs text-muted-foreground flex items-center gap-1">
+            <span className={`w-1.5 h-1.5 rounded-full inline-block ${status === 'closed' ? 'bg-red-400' : 'bg-emerald-400'}`} />
+            {status === 'closed' ? 'Закрыто' : status === 'answered' ? 'Ответили' : 'На связи 24/7'}
+          </p>
+        </div>
+      </div>
+
+      {/* Сообщения */}
+      <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-0">
+        {loading ? (
+          <div className="flex justify-center py-12 text-gold"><Icon name="Loader" size={24} className="animate-spin" /></div>
+        ) : messages.length === 0 ? (
+          <div className="glass rounded-2xl p-6 text-center text-muted-foreground text-sm">
+            <Icon name="MessageCircle" size={32} className="text-gold/40 mx-auto mb-2" />
+            Напишите нам — ответим быстро
+          </div>
+        ) : messages.map(msg => (
+          <div key={msg.id} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[78%] rounded-2xl px-4 py-2.5 ${
+              msg.sender === 'user'
+                ? 'gold-gradient text-background rounded-br-sm'
+                : 'glass text-foreground rounded-bl-sm border border-white/10'
+            }`}>
+              {msg.sender === 'admin' && (
+                <p className="text-[10px] font-bold text-gold mb-1 uppercase tracking-wider">Поддержка</p>
+              )}
+              <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{msg.text}</p>
+              <p className={`text-[10px] mt-1 ${msg.sender === 'user' ? 'text-background/60 text-right' : 'text-muted-foreground'}`}>
+                {fmt(msg.created_at)}
+              </p>
+            </div>
+          </div>
         ))}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Поле ввода */}
+      <div className="mt-3 flex gap-2 items-end">
+        <textarea
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+          placeholder="Напишите сообщение..."
+          rows={1}
+          className="flex-1 bg-background/60 border border-gold/20 rounded-2xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-sm resize-none placeholder:text-muted-foreground/50"
+          style={{ maxHeight: '96px', overflowY: 'auto' }}
+        />
+        <button
+          onClick={send}
+          disabled={!text.trim() || sending}
+          className="w-12 h-12 rounded-2xl gold-gradient flex items-center justify-center glow-gold disabled:opacity-40 shrink-0"
+        >
+          {sending ? <Icon name="Loader" size={18} className="animate-spin text-background" /> : <Icon name="Send" size={18} className="text-background" />}
+        </button>
       </div>
     </div>
   );
@@ -2300,7 +2434,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
   const [password, setPassword] = useState('');
   const [authed, setAuthed] = useState(false);
   const [authError, setAuthError] = useState('');
-  const [tab, setTab] = useState<'withdrawals' | 'orders' | 'top' | 'promos'>('withdrawals');
+  const [tab, setTab] = useState<'withdrawals' | 'orders' | 'top' | 'promos' | 'support'>('withdrawals');
   const [topDepositors, setTopDepositors] = useState<{ rank: number; user_id: number; username: string; email: string; deposits_count: number; total_deposited: number; last_deposit: string | null; balance: number }[]>([]);
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -2362,6 +2496,60 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
     fetchPromos(passwordRef.current);
   };
 
+  // Поддержка — чаты
+  interface AdminChat { id: number; user_id: number; username: string; email: string; status: string; unread_admin: number; last_message_at: string | null; last_text: string; }
+  const [supportChats, setSupportChats] = useState<AdminChat[]>([]);
+  const [selectedChat, setSelectedChat] = useState<{ id: number; username: string; email: string; status: string } | null>(null);
+  const [chatMessages, setChatMessages] = useState<SupportMessage[]>([]);
+  const [replyText, setReplyText] = useState('');
+  const [replySending, setReplySending] = useState(false);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  const fetchSupportChats = useCallback(async (pwd: string) => {
+    const res = await fetch(`${ADMIN_API}?type=support-chats`, { headers: { 'X-Admin-Password': pwd } });
+    if (res.ok) { const d = await res.json(); setSupportChats(d.chats || []); }
+  }, []);
+
+  const openChat = async (chat: AdminChat) => {
+    setSelectedChat({ id: chat.id, username: chat.username, email: chat.email, status: chat.status });
+    const res = await fetch(`${ADMIN_API}?type=support-messages&chat_id=${chat.id}`, { headers: { 'X-Admin-Password': passwordRef.current } });
+    if (res.ok) {
+      const d = await res.json();
+      setChatMessages(d.messages || []);
+      setSelectedChat({ id: d.chat.id, username: d.chat.username, email: d.chat.email, status: d.chat.status });
+      setSupportChats(prev => prev.map(c => c.id === chat.id ? { ...c, unread_admin: 0 } : c));
+    }
+    setTimeout(() => chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+  };
+
+  const sendReply = async () => {
+    const t = replyText.trim();
+    if (!t || replySending || !selectedChat) return;
+    setReplySending(true);
+    const res = await fetch(ADMIN_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Password': passwordRef.current },
+      body: JSON.stringify({ type: 'support-reply', chat_id: selectedChat.id, text: t }),
+    });
+    if (res.ok) {
+      const d = await res.json();
+      setChatMessages(prev => [...prev, { id: d.id, sender: 'admin', text: t, created_at: d.created_at }]);
+      setReplyText('');
+      setTimeout(() => chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+    }
+    setReplySending(false);
+  };
+
+  const closeChat = async (chatId: number) => {
+    await fetch(ADMIN_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Password': passwordRef.current },
+      body: JSON.stringify({ type: 'support-close', chat_id: chatId }),
+    });
+    setSelectedChat(prev => prev ? { ...prev, status: 'closed' } : null);
+    setSupportChats(prev => prev.map(c => c.id === chatId ? { ...c, status: 'closed' } : c));
+  };
+
   const fetchStats = useCallback(async (pwd: string) => {
     const res = await fetch(`${ADMIN_API}?type=stats`, { headers: { 'X-Admin-Password': pwd } });
     if (res.ok) {
@@ -2417,18 +2605,21 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       fetchChart(password, 14);
       fetchTopDepositors(password);
       fetchPromos(password);
+      fetchSupportChats(password);
     } finally {
       setLoading(false);
     }
   };
 
-  const switchTab = (t: 'withdrawals' | 'orders' | 'top' | 'promos') => {
+  const switchTab = (t: 'withdrawals' | 'orders' | 'top' | 'promos' | 'support') => {
     setTab(t);
     setFilter('');
     setSelected(null);
+    setSelectedChat(null);
     if (t === 'withdrawals' || t === 'orders') fetchData(passwordRef.current, t);
     if (t === 'top') fetchTopDepositors(passwordRef.current);
     if (t === 'promos') fetchPromos(passwordRef.current);
+    if (t === 'support') fetchSupportChats(passwordRef.current);
   };
 
   // Запрос разрешения на push-уведомления при входе
@@ -2718,34 +2909,46 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       </div>
 
       {/* Вкладки */}
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-5 gap-1.5">
         <button onClick={() => switchTab('withdrawals')}
-          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-1.5 transition-all
+          className={`py-2.5 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all
             ${tab === 'withdrawals' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
-          <Icon name="ArrowUpFromLine" size={15} /> Выводы
-          {withdrawals.length > 0 && <span className="bg-background/20 rounded-full px-1.5 py-0.5 text-xs">{withdrawals.length}</span>}
+          <Icon name="ArrowUpFromLine" size={14} />
+          <span>Выводы</span>
+          {withdrawals.length > 0 && <span className="bg-background/20 rounded-full px-1.5 text-[10px]">{withdrawals.length}</span>}
         </button>
         <button onClick={() => switchTab('orders')}
-          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-1.5 transition-all
+          className={`py-2.5 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all
             ${tab === 'orders' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
-          <Icon name="ArrowDownToLine" size={15} /> Депо
-          {orders.length > 0 && <span className="bg-background/20 rounded-full px-1.5 py-0.5 text-xs">{orders.length}</span>}
+          <Icon name="ArrowDownToLine" size={14} />
+          <span>Депо</span>
+          {orders.length > 0 && <span className="bg-background/20 rounded-full px-1.5 text-[10px]">{orders.length}</span>}
         </button>
         <button onClick={() => switchTab('top')}
-          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-1.5 transition-all
+          className={`py-2.5 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all
             ${tab === 'top' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
-          <Icon name="Crown" size={15} /> Топ
+          <Icon name="Crown" size={14} />
+          <span>Топ</span>
         </button>
         <button onClick={() => switchTab('promos')}
-          className={`py-3 rounded-2xl font-semibold text-sm flex items-center justify-center gap-1.5 transition-all
+          className={`py-2.5 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all
             ${tab === 'promos' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
-          <Icon name="Ticket" size={15} /> Промо
-          {promos.length > 0 && <span className="bg-background/20 rounded-full px-1.5 py-0.5 text-xs">{promos.length}</span>}
+          <Icon name="Ticket" size={14} />
+          <span>Промо</span>
+        </button>
+        <button onClick={() => switchTab('support')}
+          className={`py-2.5 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all relative
+            ${tab === 'support' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
+          <Icon name="MessageCircle" size={14} />
+          <span>Чаты</span>
+          {supportChats.some(c => c.unread_admin > 0) && (
+            <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-red-400" />
+          )}
         </button>
       </div>
 
       {/* Итого */}
-      {tab !== 'top' && tab !== 'promos' && currentList.length > 0 && (
+      {tab !== 'top' && tab !== 'promos' && tab !== 'support' && currentList.length > 0 && (
         <div className="glass rounded-2xl p-4 flex justify-between items-center">
           <span className="text-sm text-muted-foreground">Сумма ({currentList.length} записей)</span>
           <span className="font-display font-bold gold-text text-lg">{totalAmount.toLocaleString('ru')} ₽</span>
@@ -2753,7 +2956,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       )}
 
       {/* Фильтр */}
-      {tab !== 'top' && tab !== 'promos' && <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+      {tab !== 'top' && tab !== 'promos' && tab !== 'support' && <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
         {[{ key: '', label: 'Все' }, ...Object.entries(filterMeta).map(([k, v]) => ({ key: k, label: v.label }))].map(f => (
           <button key={f.key} onClick={() => applyFilter(f.key)}
             className={`shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all
@@ -2763,11 +2966,11 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
         ))}
       </div>}
 
-      {loading && tab !== 'top' && tab !== 'promos' ? (
+      {loading && tab !== 'top' && tab !== 'promos' && tab !== 'support' ? (
         <div className="flex justify-center py-12 text-gold">
           <Icon name="Loader" size={28} className="animate-spin" />
         </div>
-      ) : !loading && tab !== 'top' && tab !== 'promos' && currentList.length === 0 ? (
+      ) : !loading && tab !== 'top' && tab !== 'promos' && tab !== 'support' && currentList.length === 0 ? (
         <div className="glass rounded-2xl p-10 text-center text-muted-foreground text-sm">
           Записей нет
         </div>
@@ -2905,6 +3108,123 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
               </div>
             </div>
           ))}
+        </div>
+      ) : tab === 'support' ? (
+        <div className="space-y-3">
+          {/* Если открыт конкретный чат */}
+          {selectedChat ? (
+            <div className="flex flex-col" style={{ height: 'calc(100vh - 22rem)' }}>
+              {/* Шапка чата */}
+              <div className="flex items-center gap-3 mb-3">
+                <button onClick={() => setSelectedChat(null)}
+                  className="w-9 h-9 rounded-xl glass flex items-center justify-center text-gold shrink-0">
+                  <Icon name="ArrowLeft" size={18} />
+                </button>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-sm truncate">{selectedChat.username || selectedChat.email}</p>
+                  <p className="text-xs text-muted-foreground truncate">{selectedChat.email}</p>
+                </div>
+                <span className={`text-xs font-semibold px-2.5 py-1 rounded-xl shrink-0
+                  ${selectedChat.status === 'closed' ? 'bg-red-500/15 text-red-400' :
+                    selectedChat.status === 'answered' ? 'bg-emerald-500/15 text-emerald-400' :
+                    'bg-amber-500/15 text-amber-400'}`}>
+                  {selectedChat.status === 'closed' ? 'Закрыт' : selectedChat.status === 'answered' ? 'Отвечено' : 'Открыт'}
+                </span>
+                {selectedChat.status !== 'closed' && (
+                  <button onClick={() => closeChat(selectedChat.id)}
+                    className="shrink-0 text-xs text-muted-foreground glass px-3 py-1.5 rounded-xl hover:text-red-400 transition-colors">
+                    Закрыть
+                  </button>
+                )}
+              </div>
+
+              {/* Сообщения */}
+              <div className="flex-1 overflow-y-auto space-y-2 min-h-0 pr-1">
+                {chatMessages.length === 0 ? (
+                  <div className="glass rounded-2xl p-8 text-center text-muted-foreground text-sm">Нет сообщений</div>
+                ) : chatMessages.map(msg => (
+                  <div key={msg.id} className={`flex ${msg.sender === 'admin' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[78%] rounded-2xl px-4 py-2.5 ${
+                      msg.sender === 'admin'
+                        ? 'gold-gradient text-background rounded-br-sm'
+                        : 'glass text-foreground rounded-bl-sm border border-white/10'
+                    }`}>
+                      {msg.sender === 'user' && (
+                        <p className="text-[10px] font-bold text-gold mb-1 uppercase tracking-wider">
+                          {selectedChat.username || 'Игрок'}
+                        </p>
+                      )}
+                      <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{msg.text}</p>
+                      <p className={`text-[10px] mt-1 ${msg.sender === 'admin' ? 'text-background/60 text-right' : 'text-muted-foreground'}`}>
+                        {new Date(msg.created_at).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+                <div ref={chatBottomRef} />
+              </div>
+
+              {/* Поле ответа */}
+              {selectedChat.status !== 'closed' && (
+                <div className="mt-3 flex gap-2 items-end">
+                  <textarea
+                    value={replyText}
+                    onChange={e => setReplyText(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendReply(); } }}
+                    placeholder="Ответить игроку..."
+                    rows={1}
+                    className="flex-1 bg-background/60 border border-gold/20 rounded-2xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-sm resize-none placeholder:text-muted-foreground/50"
+                    style={{ maxHeight: '80px', overflowY: 'auto' }}
+                  />
+                  <button onClick={sendReply} disabled={!replyText.trim() || replySending}
+                    className="w-11 h-11 rounded-2xl gold-gradient flex items-center justify-center glow-gold disabled:opacity-40 shrink-0">
+                    {replySending
+                      ? <Icon name="Loader" size={16} className="animate-spin text-background" />
+                      : <Icon name="Send" size={16} className="text-background" />}
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Список чатов */
+            supportChats.length === 0 ? (
+              <div className="glass rounded-2xl p-10 text-center text-muted-foreground text-sm">
+                Обращений пока нет
+              </div>
+            ) : supportChats.map(chat => (
+              <button key={chat.id} onClick={() => openChat(chat)}
+                className="w-full glass rounded-2xl p-4 flex items-center gap-3 text-left hover:border-gold/20 border border-transparent transition-all">
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0
+                  ${chat.unread_admin > 0 ? 'gold-gradient' : 'bg-gold/10'}`}>
+                  <Icon name="MessageCircle" size={18} className={chat.unread_admin > 0 ? 'text-background' : 'text-gold'} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-sm truncate">{chat.username || chat.email}</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0
+                      ${chat.status === 'closed' ? 'bg-red-500/15 text-red-400' :
+                        chat.status === 'answered' ? 'bg-emerald-500/15 text-emerald-400' :
+                        'bg-amber-500/15 text-amber-400'}`}>
+                      {chat.status === 'closed' ? 'Закрыт' : chat.status === 'answered' ? 'Отвечено' : 'Новое'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground truncate mt-0.5">
+                    {chat.last_text || 'Нет сообщений'}
+                  </p>
+                  {chat.last_message_at && (
+                    <p className="text-[10px] text-muted-foreground/50 mt-0.5">
+                      {new Date(chat.last_message_at).toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  )}
+                </div>
+                {chat.unread_admin > 0 && (
+                  <span className="shrink-0 w-5 h-5 rounded-full bg-red-400 text-white text-[10px] font-bold flex items-center justify-center">
+                    {chat.unread_admin}
+                  </span>
+                )}
+              </button>
+            ))
+          )}
         </div>
       ) : null}
     </div>
