@@ -174,6 +174,7 @@ def handler(event: dict, context) -> dict:
                 'vip_cashback_pct': 0, 'total_deposited': 0.0, 'cashback_available': 0.0,
                 'next_vip_level': 'bronze', 'next_vip_label': 'Bronze',
                 'next_vip_min': 5000, 'next_vip_emoji': '🥉',
+                'avatar_url': None, 'can_spin': True, 'last_spin_at': None,
             }
         }), 'isBase64Encoded': False}
 
@@ -184,7 +185,8 @@ def handler(event: dict, context) -> dict:
 
         cur.execute("""
             SELECT id, email, username, balance, referral_code,
-                   vip_level, total_deposited, cashback_available
+                   vip_level, total_deposited, cashback_available,
+                   avatar_url, last_spin_at
             FROM users WHERE email = %s AND password_hash = %s AND is_active = TRUE
         """, (email, hash_password(password)))
         user = cur.fetchone()
