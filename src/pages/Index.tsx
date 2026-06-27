@@ -1475,48 +1475,241 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
   );
 }
 
+const GAME_META: Record<string, { name: string; emoji: string; icon: string }> = {
+  roulette:  { name: 'Рулетка',  emoji: '🎡', icon: 'CircleDot' },
+  slots:     { name: 'Слоты',    emoji: '🎰', icon: 'Cherry' },
+  blackjack: { name: 'Блэкджек', emoji: '🃏', icon: 'Spade' },
+  dice:      { name: 'Кости',    emoji: '🎲', icon: 'Dices' },
+  coin:      { name: 'Монета',   emoji: '🪙', icon: 'CircleDollarSign' },
+  mines:     { name: 'Мины',     emoji: '💣', icon: 'Bomb' },
+  crash:     { name: 'Краш',     emoji: '🚀', icon: 'Rocket' },
+};
+
+interface GameStats {
+  total_games: number; total_wins: number; total_losses: number; winrate: number;
+  total_bet: number; total_won: number; total_lost: number; biggest_win: number; profit: number;
+  favorite_game: string | null; current_streak: number; streak_type: 'win' | 'loss' | null;
+  max_win_streak: number;
+  games_stats: { game: string; total: number; wins: number; losses: number; winrate: number; total_bet: number; total_won: number }[];
+  recent_games: { game: string; bet: number; result: number; is_win: boolean; created_at: string }[];
+}
+
+function WinrateRing({ pct }: { pct: number }) {
+  const r = 28; const circ = 2 * Math.PI * r;
+  const dash = (pct / 100) * circ;
+  return (
+    <svg width="72" height="72" className="-rotate-90">
+      <circle cx="36" cy="36" r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="6" />
+      <circle cx="36" cy="36" r={r} fill="none" stroke="hsl(var(--gold))" strokeWidth="6"
+        strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
+        style={{ transition: 'stroke-dasharray 1s ease' }} />
+    </svg>
+  );
+}
+
 function StatsView() {
-  const stats = [
-    { label: 'Всего ставок', value: '328', icon: 'Dices', accent: 'gold' },
-    { label: 'Побед', value: '186', icon: 'Trophy', accent: 'emerald' },
-    { label: 'Поражений', value: '142', icon: 'X', accent: 'crimson' },
-    { label: 'Выиграно', value: '47 800 ₽', icon: 'TrendingUp', accent: 'emerald' },
-  ];
-  const history = [
-    { game: 'Слоты', result: '+1 200 ₽', win: true },
-    { game: 'Рулетка', result: '−500 ₽', win: false },
-    { game: 'Блэкджек', result: '+3 400 ₽', win: true },
-    { game: 'Кости', result: '+800 ₽', win: true },
-    { game: 'Монета', result: '−1 000 ₽', win: false },
-  ];
+  const [data, setData] = useState<GameStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState<'overview' | 'games' | 'history'>('overview');
+
+  useEffect(() => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+    if (!token) { setLoading(false); return; }
+    fetch(`${AUTH_API}?action=stats`, { headers: { 'X-Auth-Token': token } })
+      .then(r => r.json())
+      .then(d => setData(d))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const fmt = (n: number) => n.toLocaleString('ru');
+  const fmtDate = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleString('ru', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  };
+
+  if (loading) return (
+    <div className="flex justify-center py-24 text-gold">
+      <Icon name="Loader" size={32} className="animate-spin" />
+    </div>
+  );
+
+  if (!data || data.total_games === 0) return (
+    <div className="space-y-5">
+      <SectionTitle title="Статистика" subtitle="Твои результаты" icon="TrendingUp" />
+      <div className="glass rounded-3xl p-12 flex flex-col items-center gap-4 text-center">
+        <Icon name="Dices" size={48} className="text-gold/30" />
+        <p className="text-muted-foreground">Сыграй первую игру — здесь появится твоя статистика</p>
+      </div>
+    </div>
+  );
+
+  const favMeta = data.favorite_game ? (GAME_META[data.favorite_game] || { name: data.favorite_game, emoji: '🎮', icon: 'Gamepad2' }) : null;
+  const profit = data.profit;
+
   return (
     <div className="space-y-5">
       <SectionTitle title="Статистика" subtitle="Твои результаты" icon="TrendingUp" />
-      <div className="grid grid-cols-2 gap-3">
-        {stats.map((s, i) => (
-          <div key={s.label} className="animate-float-up glass rounded-2xl p-4" style={{ animationDelay: `${i * 60}ms` }}>
-            <Icon name={s.icon} size={20} style={{ color: accentColor(s.accent) }} className="mb-2" />
-            <div className="font-display text-2xl font-bold">{s.value}</div>
-            <div className="text-xs text-muted-foreground">{s.label}</div>
+
+      {/* Главная карточка — винрейт */}
+      <div className="animate-float-up glass rounded-3xl p-5 flex items-center gap-5">
+        <div className="relative shrink-0">
+          <WinrateRing pct={data.winrate} />
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
+            <span className="font-display font-bold text-lg leading-none gold-text">{data.winrate}%</span>
+            <span className="text-[9px] text-muted-foreground uppercase tracking-wider">win</span>
           </div>
-        ))}
-      </div>
-      <div>
-        <h3 className="font-display text-lg font-semibold mb-3">История игр</h3>
-        <div className="space-y-2">
-          {history.map((h, i) => (
-            <div key={i} className="animate-float-up glass rounded-xl px-4 py-3 flex items-center justify-between" style={{ animationDelay: `${i * 50}ms` }}>
-              <div className="flex items-center gap-3">
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${h.win ? 'bg-emerald/15' : 'bg-crimson/15'}`}>
-                  <Icon name={h.win ? 'ArrowUp' : 'ArrowDown'} size={16} style={{ color: h.win ? 'hsl(var(--emerald))' : 'hsl(var(--crimson))' }} />
-                </div>
-                <span className="font-medium">{h.game}</span>
-              </div>
-              <span className="font-display font-semibold" style={{ color: h.win ? 'hsl(var(--emerald))' : 'hsl(var(--crimson))' }}>{h.result}</span>
-            </div>
-          ))}
+        </div>
+        <div className="flex-1 grid grid-cols-3 gap-3">
+          <div className="text-center">
+            <div className="font-display text-xl font-bold">{fmt(data.total_games)}</div>
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Игр</div>
+          </div>
+          <div className="text-center">
+            <div className="font-display text-xl font-bold text-emerald-400">{fmt(data.total_wins)}</div>
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Побед</div>
+          </div>
+          <div className="text-center">
+            <div className="font-display text-xl font-bold text-red-400">{fmt(data.total_losses)}</div>
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Проигр.</div>
+          </div>
         </div>
       </div>
+
+      {/* Серия + любимая игра */}
+      <div className="grid grid-cols-2 gap-3">
+        {/* Текущая серия */}
+        <div className="animate-float-up glass rounded-2xl p-4 space-y-1" style={{ animationDelay: '60ms' }}>
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground uppercase tracking-wider mb-2">
+            <Icon name="Flame" size={12} className={data.streak_type === 'win' ? 'text-amber-400' : 'text-blue-400'} />
+            Текущая серия
+          </div>
+          <div className={`font-display text-3xl font-bold ${data.streak_type === 'win' ? 'text-amber-400' : 'text-blue-400'}`}>
+            {data.current_streak}
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {data.streak_type === 'win' ? '🔥 побед подряд' : '❄️ поражений подряд'}
+          </div>
+        </div>
+
+        {/* Лучшая серия */}
+        <div className="animate-float-up glass rounded-2xl p-4 space-y-1" style={{ animationDelay: '80ms' }}>
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground uppercase tracking-wider mb-2">
+            <Icon name="Trophy" size={12} className="text-gold" />
+            Рекорд серии
+          </div>
+          <div className="font-display text-3xl font-bold gold-text">{data.max_win_streak}</div>
+          <div className="text-xs text-muted-foreground">побед подряд</div>
+        </div>
+
+        {/* Любимая игра */}
+        {favMeta && (
+          <div className="animate-float-up glass rounded-2xl p-4 space-y-1 col-span-2" style={{ animationDelay: '100ms' }}>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground uppercase tracking-wider mb-2">
+              <Icon name="Star" size={12} className="text-gold" /> Любимая игра
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-3xl">{favMeta.emoji}</span>
+              <div>
+                <div className="font-display text-xl font-bold">{favMeta.name}</div>
+                <div className="text-xs text-muted-foreground">
+                  {data.games_stats.find(g => g.game === data.favorite_game)?.total ?? 0} партий сыграно
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Финансы */}
+      <div className="animate-float-up grid grid-cols-3 gap-2" style={{ animationDelay: '120ms' }}>
+        <div className="glass rounded-2xl p-3 text-center space-y-0.5">
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Поставлено</div>
+          <div className="font-display font-bold text-sm">{fmt(Math.round(data.total_bet))} ₽</div>
+        </div>
+        <div className="glass rounded-2xl p-3 text-center space-y-0.5">
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Лучший выигрыш</div>
+          <div className="font-display font-bold text-sm text-emerald-400">+{fmt(Math.round(data.biggest_win))} ₽</div>
+        </div>
+        <div className="glass rounded-2xl p-3 text-center space-y-0.5">
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Итого</div>
+          <div className={`font-display font-bold text-sm ${profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {profit >= 0 ? '+' : ''}{fmt(Math.round(profit))} ₽
+          </div>
+        </div>
+      </div>
+
+      {/* Вкладки */}
+      <div className="grid grid-cols-2 gap-2">
+        {(['games', 'history'] as const).map(t => (
+          <button key={t} onClick={() => setTab(t)}
+            className={`py-2.5 rounded-2xl text-sm font-semibold transition-all ${tab === t ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
+            {t === 'games' ? 'По играм' : 'Последние игры'}
+          </button>
+        ))}
+      </div>
+
+      {/* По играм */}
+      {tab === 'games' && (
+        <div className="space-y-2">
+          {data.games_stats.map((g, i) => {
+            const meta = GAME_META[g.game] || { name: g.game, emoji: '🎮', icon: 'Gamepad2' };
+            const wr = g.winrate;
+            return (
+              <div key={g.game} className="animate-float-up glass rounded-2xl p-4" style={{ animationDelay: `${i * 40}ms` }}>
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="text-2xl">{meta.emoji}</span>
+                  <div className="flex-1">
+                    <div className="font-semibold">{meta.name}</div>
+                    <div className="text-xs text-muted-foreground">{g.total} партий</div>
+                  </div>
+                  <div className={`font-display font-bold text-lg ${wr >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {wr}%
+                  </div>
+                </div>
+                {/* Прогресс-бар */}
+                <div className="h-1.5 bg-white/5 rounded-full overflow-hidden">
+                  <div className="h-full rounded-full transition-all duration-700"
+                    style={{ width: `${wr}%`, background: wr >= 50 ? 'hsl(var(--emerald))' : 'hsl(var(--crimson))' }} />
+                </div>
+                <div className="flex justify-between text-[10px] text-muted-foreground mt-1.5">
+                  <span>✅ {g.wins} побед</span>
+                  <span>❌ {g.losses} поражений</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Последние игры */}
+      {tab === 'history' && (
+        <div className="space-y-2">
+          {data.recent_games.map((h, i) => {
+            const meta = GAME_META[h.game] || { name: h.game, emoji: '🎮', icon: 'Gamepad2' };
+            const delta = h.is_win ? h.result : -h.bet;
+            return (
+              <div key={i} className="animate-float-up glass rounded-xl px-4 py-3 flex items-center gap-3"
+                style={{ animationDelay: `${i * 30}ms` }}>
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-base
+                  ${h.is_win ? 'bg-emerald-500/10' : 'bg-red-500/10'}`}>
+                  {meta.emoji}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-sm">{meta.name}</div>
+                  <div className="text-[10px] text-muted-foreground">{fmtDate(h.created_at)}</div>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className={`font-display font-bold text-sm ${h.is_win ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {delta >= 0 ? '+' : ''}{fmt(Math.round(delta))} ₽
+                  </div>
+                  <div className="text-[10px] text-muted-foreground">ставка {fmt(Math.round(h.bet))} ₽</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
