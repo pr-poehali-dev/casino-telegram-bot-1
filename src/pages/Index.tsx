@@ -46,9 +46,44 @@ interface AuthUser {
   avatar_url?: string | null;
 }
 
+function useAnimatedNumber(value: number, duration = 600) {
+  const [display, setDisplay] = useState(value);
+  const rafRef = useRef<number | null>(null);
+  const startRef = useRef<number | null>(null);
+  const fromRef = useRef(value);
+
+  useEffect(() => {
+    const from = fromRef.current;
+    const to = value;
+    if (from === to) return;
+
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    startRef.current = null;
+
+    const step = (ts: number) => {
+      if (!startRef.current) startRef.current = ts;
+      const elapsed = ts - startRef.current;
+      const progress = Math.min(elapsed / duration, 1);
+      // easeOutExpo
+      const ease = progress === 1 ? 1 : 1 - Math.pow(2, -10 * progress);
+      setDisplay(Math.round(from + (to - from) * ease));
+      if (progress < 1) {
+        rafRef.current = requestAnimationFrame(step);
+      } else {
+        fromRef.current = to;
+      }
+    };
+    rafRef.current = requestAnimationFrame(step);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+  }, [value, duration]);
+
+  return display;
+}
+
 export default function Index() {
   const [section, setSection] = useState<Section>('home');
   const [balance, setBalance] = useState(0);
+  const animatedBalance = useAnimatedNumber(balance, 700);
   const [activeGame, setActiveGame] = useState<string | null>(null);
   const [pendingWithdrawals, setPendingWithdrawals] = useState(0);
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -173,7 +208,7 @@ export default function Index() {
             onClick={() => setSection('deposit')}
             className="flex items-center gap-2 glass rounded-full pl-3 pr-1.5 py-1.5 border-gold/30 hover:border-gold/60 transition-colors"
           >
-            <span className="font-display font-semibold text-gold tabular-nums">{balance.toLocaleString('ru')}</span>
+            <span className="font-display font-semibold text-gold tabular-nums">{animatedBalance.toLocaleString('ru')}</span>
             <span className="text-xs text-muted-foreground">₽</span>
             <span className="w-6 h-6 rounded-full gold-gradient flex items-center justify-center">
               <Icon name="Plus" size={14} className="text-background" />
