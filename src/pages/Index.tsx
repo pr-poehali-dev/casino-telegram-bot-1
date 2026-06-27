@@ -80,7 +80,24 @@ function useAnimatedNumber(value: number, duration = 600) {
   return display;
 }
 
+const THEME_KEY = 'casino_theme';
+
+function useTheme() {
+  const [theme, setTheme] = useState<'dark' | 'light'>(() =>
+    (localStorage.getItem(THEME_KEY) as 'dark' | 'light') || 'dark'
+  );
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.remove('theme-light', 'theme-dark');
+    if (theme === 'light') root.classList.add('theme-light');
+    localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
+  const toggle = () => setTheme(t => t === 'dark' ? 'light' : 'dark');
+  return { theme, toggle };
+}
+
 export default function Index() {
+  const { theme, toggle: toggleTheme } = useTheme();
   const [section, setSection] = useState<Section>('home');
   const [balance, setBalance] = useState(0);
   const animatedBalance = useAnimatedNumber(balance, 700);
@@ -191,7 +208,7 @@ export default function Index() {
   }
 
   return (
-    <div className="dark min-h-screen bg-background text-foreground overflow-x-hidden">
+    <div className={`${theme === 'dark' ? 'dark' : 'theme-light'} min-h-screen bg-background text-foreground overflow-x-hidden`}>
       <div className="mx-auto max-w-md min-h-screen flex flex-col relative">
         {/* Header */}
         <header className="sticky top-0 z-30 glass px-5 py-4 flex items-center justify-between border-b border-gold/10">
@@ -273,7 +290,7 @@ export default function Index() {
               {section === 'deposit' && <DepositView notify={notify} onBalanceChange={syncBalance} />}
               {section === 'withdraw' && <WithdrawView balance={balance} notify={notify} />}
               {section === 'stats' && <StatsView />}
-              {section === 'profile' && <ProfileView setSection={setSection} notify={notify} user={user} onLogout={handleLogout} onBalanceChange={syncBalance} onUserUpdate={handleUserUpdate} />}
+              {section === 'profile' && <ProfileView setSection={setSection} notify={notify} user={user} onLogout={handleLogout} onBalanceChange={syncBalance} onUserUpdate={handleUserUpdate} theme={theme} onToggleTheme={toggleTheme} />}
               {section === 'support' && <SupportView notify={notify} />}
               {section === 'admin' && <AdminView onPendingChange={setPendingWithdrawals} />}
               {section === 'referral' && <ReferralView user={user} onBack={() => setSection('profile')} />}
@@ -1719,10 +1736,11 @@ const VIP_COLORS: Record<string, string> = {
 };
 const VIP_LEVELS_ORDER = ['none', 'bronze', 'silver', 'gold', 'platinum'];
 
-function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUserUpdate }: {
+function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUserUpdate, theme, onToggleTheme }: {
   setSection: (s: Section) => void; notify: (m: string) => void;
   user: AuthUser | null; onLogout: () => void; onBalanceChange: (d: number) => void;
   onUserUpdate: (u: Partial<AuthUser>) => void;
+  theme: 'dark' | 'light'; onToggleTheme: () => void;
 }) {
   const [tapCount, setTapCount] = useState(0);
   const tapTimer = useRef<number | null>(null);
@@ -1987,6 +2005,24 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
           )}
         </div>
       )}
+
+      {/* Переключатель темы */}
+      <button onClick={onToggleTheme}
+        className="animate-float-up w-full glass rounded-2xl p-4 flex items-center gap-3 hover-lift"
+        style={{ animationDelay: '80ms' }}>
+        <div className="w-10 h-10 rounded-xl bg-gold/10 text-gold flex items-center justify-center">
+          <Icon name={theme === 'dark' ? 'Sun' : 'Moon'} size={20} />
+        </div>
+        <span className="font-medium flex-1 text-left">
+          {theme === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
+        </span>
+        {/* Тогл */}
+        <div className={`w-12 h-6 rounded-full transition-colors duration-300 relative shrink-0
+          ${theme === 'light' ? 'bg-gold' : 'bg-white/10'}`}>
+          <div className={`absolute top-1 w-4 h-4 rounded-full transition-all duration-300 shadow
+            ${theme === 'light' ? 'left-7 bg-background' : 'left-1 bg-muted-foreground'}`} />
+        </div>
+      </button>
 
       {/* Меню */}
       <div className="space-y-2.5">
