@@ -959,7 +959,7 @@ const WITHDRAW_METHODS = [
   { id: 'crypto', name: 'Крипто (USDT)',  desc: 'TRC-20 / ERC-20',      icon: 'Bitcoin',    time: '30 минут', min: 1000 },
 ];
 
-type WithdrawStep = 'method' | 'form' | 'confirm' | 'success';
+type WithdrawStep = 'method' | 'form' | 'confirm' | 'success' | 'history';
 
 const WITHDRAW_API = 'https://functions.poehali.dev/5264284f-4bd1-4c29-9530-a9fd03734d4d';
 
@@ -983,6 +983,21 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
   const [wdStatus, setWdStatus] = useState<string>('pending');
   const [loading, setLoading] = useState(false);
   const pollRef = useRef<number | null>(null);
+
+  // История выводов
+  interface WdHistoryItem { id: number; request_number: string; method: string; destination: string; amount: number; status: string; created_at: string; updated_at: string; }
+  const [history, setHistory] = useState<WdHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const loadHistory = async () => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+    if (!token) return;
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`${AUTH_API}?action=my-withdrawals`, { headers: { 'X-Auth-Token': token } });
+      if (res.ok) { const d = await res.json(); setHistory(d.withdrawals || []); }
+    } finally { setHistoryLoading(false); }
+  };
 
   const parsedAmount = parseInt(amount) || 0;
   const inputCls = 'w-full bg-background/60 border border-gold/20 rounded-xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-foreground placeholder:text-muted-foreground/50';
@@ -1059,6 +1074,73 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
     : method?.id === 'sbp' ? 'Номер телефона'
     : method?.id === 'ymoney' ? 'Номер кошелька'
     : 'Адрес кошелька';
+
+  // ── HISTORY ──
+  if (step === 'history') {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-3 animate-float-up">
+          <button onClick={() => setStep('method')} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold">
+            <Icon name="ArrowLeft" size={20} />
+          </button>
+          <div className="flex-1">
+            <h2 className="font-display text-xl font-bold">История выводов</h2>
+            <p className="text-xs text-muted-foreground">{history.length} заявок</p>
+          </div>
+          <button onClick={loadHistory} className="w-9 h-9 glass rounded-xl flex items-center justify-center text-gold">
+            <Icon name="RefreshCw" size={15} className={historyLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+
+        {historyLoading ? (
+          <div className="flex justify-center py-16 text-gold">
+            <Icon name="Loader" size={28} className="animate-spin" />
+          </div>
+        ) : history.length === 0 ? (
+          <div className="glass rounded-2xl p-10 flex flex-col items-center gap-3 text-center">
+            <Icon name="ArrowUpFromLine" size={36} className="text-gold/30" />
+            <p className="text-muted-foreground text-sm">Заявок на вывод ещё не было</p>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {history.map((w, i) => {
+              const meta = WD_STATUS_META[w.status] || WD_STATUS_META.pending;
+              const date = new Date(w.created_at);
+              const dateStr = date.toLocaleDateString('ru', { day: 'numeric', month: 'short' });
+              const timeStr = date.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
+              return (
+                <div key={w.id} className="animate-float-up glass rounded-2xl p-4 space-y-3"
+                  style={{ animationDelay: `${i * 40}ms` }}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-gold/10 flex items-center justify-center shrink-0">
+                        <Icon name="ArrowUpFromLine" size={16} className="text-gold" />
+                      </div>
+                      <div>
+                        <p className="font-semibold text-sm">{w.method}</p>
+                        <p className="text-xs text-muted-foreground font-mono">{w.destination}</p>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="font-display font-bold text-base">{w.amount.toLocaleString('ru')} ₽</p>
+                      <p className="text-[10px] text-muted-foreground">{dateStr}, {timeStr}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-mono text-muted-foreground/60">{w.request_number}</span>
+                    <span className={`text-xs font-semibold flex items-center gap-1 ${meta.color}`}>
+                      <Icon name={meta.icon} size={12} />
+                      {meta.label}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   // ── SUCCESS ──
   if (step === 'success') {
@@ -1295,7 +1377,15 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
   const canWithdraw = balance >= 100;
   return (
     <div className="space-y-5">
-      <SectionTitle title="Вывод средств" subtitle="Выведи выигрыш" icon="ArrowUpFromLine" />
+      <div className="flex items-center justify-between">
+        <SectionTitle title="Вывод средств" subtitle="Выведи выигрыш" icon="ArrowUpFromLine" />
+        <button
+          onClick={() => { loadHistory(); setStep('history'); }}
+          className="flex items-center gap-1.5 text-xs font-semibold text-gold glass rounded-xl px-3 py-2 hover:bg-gold/10 transition-colors shrink-0"
+        >
+          <Icon name="History" size={14} /> История
+        </button>
+      </div>
 
       {/* Balance */}
       <div className="animate-float-up relative glass rounded-2xl p-5 overflow-hidden">

@@ -887,6 +887,39 @@ def handler(event: dict, context) -> dict:
         return {'statusCode': 200, 'headers': HEADERS,
                 'body': json.dumps({'unread': unread, 'messages': msgs}), 'isBase64Encoded': False}
 
+    # ── MY-WITHDRAWALS: история заявок на вывод ──
+    if action == 'my-withdrawals' and http_method == 'GET':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+        cur.execute("""
+            SELECT id, request_number, method, destination, amount, status, created_at, updated_at
+            FROM withdrawals
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+            LIMIT 50
+        """, (user[0],))
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+        withdrawals = [{
+            'id': r[0],
+            'request_number': r[1],
+            'method': r[2],
+            'destination': r[3][:4] + '••••' + r[3][-4:] if len(r[3]) >= 8 else r[3],
+            'amount': float(r[4]),
+            'status': r[5],
+            'created_at': r[6].isoformat() if r[6] else None,
+            'updated_at': r[7].isoformat() if r[7] else None,
+        } for r in rows]
+        return {'statusCode': 200, 'headers': HEADERS,
+                'body': json.dumps({'withdrawals': withdrawals}), 'isBase64Encoded': False}
+
     cur.close(); conn.close()
     return {'statusCode': 400, 'headers': HEADERS,
             'body': json.dumps({'error': 'Unknown action'}), 'isBase64Encoded': False}
