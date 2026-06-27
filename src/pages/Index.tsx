@@ -13,6 +13,7 @@ import MinesGame from '@/components/MinesGame';
 import CrashGame from '@/components/CrashGame';
 import WheelGame from '@/components/WheelGame';
 import VideoPokerGame from '@/components/VideoPokerGame';
+import BullsBears from '@/components/BullsBears';
 
 type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard';
 
@@ -26,6 +27,7 @@ const GAMES = [
   { id: 'crash', name: 'Краш', icon: 'Rocket', desc: 'Забери до краша', accent: 'crimson', emoji: '🚀' },
   { id: 'wheel', name: 'Колесо', icon: 'CircleDot', desc: 'Крути и умножай', accent: 'gold', emoji: '🎡' },
   { id: 'videopoker', name: 'Видеопокер', icon: 'Spade', desc: 'Держи и меняй карты', accent: 'emerald', emoji: '🂱' },
+  { id: 'bulls',      name: 'Быки/Медведи', icon: 'TrendingUp', desc: 'Угадай движение рынка', accent: 'emerald', emoji: '📈' },
 ];
 
 const NAV = [
@@ -299,6 +301,13 @@ export default function Index() {
               balance={balance}
               onBalanceChange={(delta) => syncBalance(delta)}
               onGameResult={(bet, result, isWin, details) => recordGame('Видеопокер', bet, result, isWin, details)}
+              onBack={() => setActiveGame(null)}
+            />
+          ) : activeGame === 'bulls' ? (
+            <BullsBears
+              balance={balance}
+              onBalanceChange={(delta) => syncBalance(delta)}
+              onGameResult={(bet, result, isWin, details) => recordGame('Быки/Медведи', bet, result, isWin, details)}
               onBack={() => setActiveGame(null)}
             />
           ) : (
