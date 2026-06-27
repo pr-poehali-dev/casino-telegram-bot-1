@@ -14,6 +14,7 @@ import CrashGame from '@/components/CrashGame';
 import WheelGame from '@/components/WheelGame';
 import VideoPokerGame from '@/components/VideoPokerGame';
 import BullsBears from '@/components/BullsBears';
+import HiLoGame from '@/components/HiLoGame';
 
 type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard';
 
@@ -27,7 +28,8 @@ const GAMES = [
   { id: 'crash', name: 'Краш', icon: 'Rocket', desc: 'Забери до краша', accent: 'crimson', emoji: '🚀' },
   { id: 'wheel', name: 'Колесо', icon: 'CircleDot', desc: 'Крути и умножай', accent: 'gold', emoji: '🎡' },
   { id: 'videopoker', name: 'Видеопокер', icon: 'Spade', desc: 'Держи и меняй карты', accent: 'emerald', emoji: '🂱' },
-  { id: 'bulls',      name: 'Быки/Медведи', icon: 'TrendingUp', desc: 'Угадай движение рынка', accent: 'emerald', emoji: '📈' },
+  { id: 'bulls', name: 'Быки/Медведи', icon: 'TrendingUp',  desc: 'Угадай движение рынка', accent: 'emerald', emoji: '📈' },
+  { id: 'hilo',  name: 'Hi-Lo',        icon: 'ChevronsUpDown', desc: 'Выше или ниже?',      accent: 'gold',    emoji: '🎴' },
 ];
 
 const NAV = [
@@ -308,6 +310,13 @@ export default function Index() {
               balance={balance}
               onBalanceChange={(delta) => syncBalance(delta)}
               onGameResult={(bet, result, isWin, details) => recordGame('Быки/Медведи', bet, result, isWin, details)}
+              onBack={() => setActiveGame(null)}
+            />
+          ) : activeGame === 'hilo' ? (
+            <HiLoGame
+              balance={balance}
+              onBalanceChange={(delta) => syncBalance(delta)}
+              onGameResult={(bet, result, isWin, details) => recordGame('Hi-Lo', bet, result, isWin, details)}
               onBack={() => setActiveGame(null)}
             />
           ) : (
