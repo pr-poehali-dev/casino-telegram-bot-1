@@ -920,6 +920,134 @@ def handler(event: dict, context) -> dict:
         return {'statusCode': 200, 'headers': HEADERS,
                 'body': json.dumps({'withdrawals': withdrawals}), 'isBase64Encoded': False}
 
+    # ── STATS: статистика игрока ──
+    if action == 'stats' and http_method == 'GET':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+        uid = user[0]
+
+        # Общая статистика
+        cur.execute("""
+            SELECT
+                COUNT(*) AS total_games,
+                SUM(CASE WHEN is_win THEN 1 ELSE 0 END) AS total_wins,
+                SUM(CASE WHEN NOT is_win THEN 1 ELSE 0 END) AS total_losses,
+                SUM(bet) AS total_bet,
+                SUM(CASE WHEN is_win THEN result ELSE 0 END) AS total_won,
+                SUM(CASE WHEN NOT is_win THEN bet ELSE 0 END) AS total_lost,
+                MAX(CASE WHEN is_win THEN result ELSE 0 END) AS biggest_win
+            FROM game_history WHERE user_id = %s
+        """, (uid,))
+        row = cur.fetchone()
+        total_games = int(row[0] or 0)
+        total_wins  = int(row[1] or 0)
+        total_losses= int(row[2] or 0)
+        total_bet   = float(row[3] or 0)
+        total_won   = float(row[4] or 0)
+        total_lost  = float(row[5] or 0)
+        biggest_win = float(row[6] or 0)
+        winrate = round(total_wins / total_games * 100, 1) if total_games > 0 else 0
+
+        # Любимая игра (по количеству сессий)
+        cur.execute("""
+            SELECT game, COUNT(*) AS cnt
+            FROM game_history WHERE user_id = %s
+            GROUP BY game ORDER BY cnt DESC LIMIT 1
+        """, (uid,))
+        fav_row = cur.fetchone()
+        favorite_game = fav_row[0] if fav_row else None
+
+        # Статистика по каждой игре
+        cur.execute("""
+            SELECT game,
+                COUNT(*) AS total,
+                SUM(CASE WHEN is_win THEN 1 ELSE 0 END) AS wins,
+                SUM(bet) AS total_bet,
+                SUM(CASE WHEN is_win THEN result ELSE 0 END) AS total_won
+            FROM game_history WHERE user_id = %s
+            GROUP BY game ORDER BY total DESC
+        """, (uid,))
+        games_stats = [{
+            'game': r[0],
+            'total': int(r[1]),
+            'wins': int(r[2]),
+            'losses': int(r[1]) - int(r[2]),
+            'winrate': round(int(r[2]) / int(r[1]) * 100, 1) if int(r[1]) > 0 else 0,
+            'total_bet': float(r[3] or 0),
+            'total_won': float(r[4] or 0),
+        } for r in cur.fetchall()]
+
+        # Текущая серия (последовательность побед или поражений подряд)
+        cur.execute("""
+            SELECT is_win FROM game_history
+            WHERE user_id = %s ORDER BY created_at DESC LIMIT 50
+        """, (uid,))
+        recent = [r[0] for r in cur.fetchall()]
+        current_streak = 0
+        streak_type = None
+        if recent:
+            streak_type = 'win' if recent[0] else 'loss'
+            for r in recent:
+                if r == recent[0]:
+                    current_streak += 1
+                else:
+                    break
+
+        # Максимальная серия побед
+        cur.execute("""
+            SELECT is_win FROM game_history
+            WHERE user_id = %s ORDER BY created_at ASC
+        """, (uid,))
+        all_results = [r[0] for r in cur.fetchall()]
+        max_win_streak = 0
+        cur_streak = 0
+        for r in all_results:
+            if r:
+                cur_streak += 1
+                max_win_streak = max(max_win_streak, cur_streak)
+            else:
+                cur_streak = 0
+
+        # Последние 20 игр
+        cur.execute("""
+            SELECT game, bet, result, is_win, created_at
+            FROM game_history WHERE user_id = %s
+            ORDER BY created_at DESC LIMIT 20
+        """, (uid,))
+        recent_games = [{
+            'game': r[0],
+            'bet': float(r[1]),
+            'result': float(r[2]),
+            'is_win': r[3],
+            'created_at': r[4].isoformat() if r[4] else None,
+        } for r in cur.fetchall()]
+
+        cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'total_games': total_games,
+            'total_wins': total_wins,
+            'total_losses': total_losses,
+            'winrate': winrate,
+            'total_bet': total_bet,
+            'total_won': total_won,
+            'total_lost': total_lost,
+            'biggest_win': biggest_win,
+            'profit': total_won - total_lost,
+            'favorite_game': favorite_game,
+            'games_stats': games_stats,
+            'current_streak': current_streak,
+            'streak_type': streak_type,
+            'max_win_streak': max_win_streak,
+            'recent_games': recent_games,
+        }), 'isBase64Encoded': False}
+
     cur.close(); conn.close()
     return {'statusCode': 400, 'headers': HEADERS,
             'body': json.dumps({'error': 'Unknown action'}), 'isBase64Encoded': False}
