@@ -16,6 +16,7 @@ import VideoPokerGame from '@/components/VideoPokerGame';
 import BullsBears from '@/components/BullsBears';
 import HiLoGame from '@/components/HiLoGame';
 import BingoGame from '@/components/BingoGame';
+import KenoGame from '@/components/KenoGame';
 
 type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard';
 
@@ -31,7 +32,8 @@ const GAMES = [
   { id: 'videopoker', name: 'Видеопокер', icon: 'Spade', desc: 'Держи и меняй карты', accent: 'emerald', emoji: '🂱' },
   { id: 'bulls', name: 'Быки/Медведи', icon: 'TrendingUp',  desc: 'Угадай движение рынка', accent: 'emerald', emoji: '📈' },
   { id: 'hilo',  name: 'Hi-Lo',        icon: 'ChevronsUpDown', desc: 'Выше или ниже?',      accent: 'gold',    emoji: '🎴' },
-  { id: 'bingo', name: 'Бинго',        icon: 'Grid3x3',        desc: 'Собери линию на карточке', accent: 'crimson', emoji: '🎱' },
+  { id: 'bingo', name: 'Бинго',  icon: 'Grid3x3',   desc: 'Собери линию на карточке',   accent: 'crimson', emoji: '🎱' },
+  { id: 'keno',  name: 'Кено',   icon: 'Target',    desc: 'Выбери числа и жди шары',    accent: 'gold',    emoji: '🎯' },
 ];
 
 const NAV = [
@@ -326,6 +328,13 @@ export default function Index() {
               balance={balance}
               onBalanceChange={(delta) => syncBalance(delta)}
               onGameResult={(bet, result, isWin, details) => recordGame('Бинго', bet, result, isWin, details)}
+              onBack={() => setActiveGame(null)}
+            />
+          ) : activeGame === 'keno' ? (
+            <KenoGame
+              balance={balance}
+              onBalanceChange={(delta) => syncBalance(delta)}
+              onGameResult={(bet, result, isWin, details) => recordGame('Кено', bet, result, isWin, details)}
               onBack={() => setActiveGame(null)}
             />
           ) : (
