@@ -121,18 +121,30 @@ export default function Index() {
   const [canClaimBonus, setCanClaimBonus] = useState(false);
   const [canSpin, setCanSpin] = useState(false);
 
-  // При старте — восстанавливаем сессию из localStorage
+  // При старте — восстанавливаем сессию из localStorage (retry до 3 раз)
   useEffect(() => {
     const token = localStorage.getItem(AUTH_TOKEN_KEY);
     if (!token) { setAuthLoading(false); return; }
-    fetch(`${AUTH_API}?action=me`, { headers: { 'X-Auth-Token': token } })
-      .then(r => r.ok ? r.json() : null)
-      .then(data => {
+    const tryMe = async (attempt: number) => {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        const r = await fetch(`${AUTH_API}?action=me`, {
+          headers: { 'X-Auth-Token': token },
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        const data = r.ok ? await r.json() : null;
         if (data?.user) { setUser(data.user); setBalance(data.user.balance); checkDailyBonus(token); checkSpinStatus(token); }
         else localStorage.removeItem(AUTH_TOKEN_KEY);
-      })
-      .catch(() => localStorage.removeItem(AUTH_TOKEN_KEY))
-      .finally(() => setAuthLoading(false));
+        setAuthLoading(false);
+      } catch {
+        if (attempt < 3) { setTimeout(() => tryMe(attempt + 1), attempt * 1000); return; }
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+        setAuthLoading(false);
+      }
+    };
+    tryMe(1);
   }, []);
 
   const checkDailyBonus = useCallback((token: string) => {
@@ -2341,23 +2353,39 @@ function AuthScreen({ onSuccess }: { onSuccess: (token: string, user: AuthUser) 
     setError('');
     if (!email || !password) { setError('Заполни все поля'); return; }
     setLoading(true);
-    try {
-      const action = mode === 'login' ? 'login' : 'register';
-      const body: Record<string, string> = { email, password };
-      if (mode === 'register' && username) body.username = username;
-      if (mode === 'register' && urlRef) body.ref_code = urlRef;
-      const res = await fetch(`${AUTH_API}?action=${action}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok) { setError(data.error || 'Ошибка'); return; }
-      onSuccess(data.token, data.user);
-    } catch {
-      setError('Ошибка сети, попробуй снова');
-    } finally {
-      setLoading(false);
+
+    const action = mode === 'login' ? 'login' : 'register';
+    const body: Record<string, string> = { email, password };
+    if (mode === 'register' && username) body.username = username;
+    if (mode === 'register' && urlRef) body.ref_code = urlRef;
+
+    // Retry до 3 раз с таймаутом 15с — на случай cold start
+    const MAX_ATTEMPTS = 3;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        const res = await fetch(`${AUTH_API}?action=${action}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        const data = await res.json();
+        if (!res.ok) { setError(data.error || 'Ошибка'); setLoading(false); return; }
+        onSuccess(data.token, data.user);
+        setLoading(false);
+        return;
+      } catch {
+        if (attempt < MAX_ATTEMPTS) {
+          // Пауза перед следующей попыткой: 1с, 2с
+          await new Promise(r => setTimeout(r, attempt * 1000));
+        } else {
+          setError('Ошибка сети, попробуй снова');
+          setLoading(false);
+        }
+      }
     }
   };
 
