@@ -56,6 +56,7 @@ interface AuthUser {
   total_deposited?: number; cashback_available?: number;
   next_vip_level?: string; next_vip_label?: string; next_vip_min?: number; next_vip_emoji?: string;
   avatar_url?: string | null;
+  first_deposit_bonus_claimed?: boolean;
 }
 
 function useAnimatedNumber(value: number, duration = 600) {
@@ -182,8 +183,15 @@ export default function Index() {
     if (res.ok) {
       const data = await res.json();
       setBalance(data.balance);
-      // После депозита обновляем данные пользователя (VIP-уровень мог измениться)
       if (isDeposit) {
+        // Показываем тост с бонусом первого депозита
+        if (data.first_deposit_bonus > 0) {
+          toast.success(`🎉 Бонус первого депозита: +${data.first_deposit_bonus.toLocaleString('ru')} ₽`, {
+            description: 'Бонус 100% зачислен на баланс!',
+            duration: 6000,
+          });
+        }
+        // Обновляем данные пользователя (VIP-уровень и флаг бонуса)
         fetch(`${AUTH_API}?action=me`, { headers: { 'X-Auth-Token': token } })
           .then(r => r.json()).then(d => { if (d.user) setUser(d.user); }).catch(() => {});
       }
@@ -339,7 +347,7 @@ export default function Index() {
             />
           ) : (
             <>
-              {section === 'home' && <HomeView balance={balance} setSection={setSection} openGame={openGame} notify={notify} canClaimBonus={canClaimBonus} />}
+              {section === 'home' && <HomeView balance={balance} setSection={setSection} openGame={openGame} notify={notify} canClaimBonus={canClaimBonus} user={user} />}
               {section === 'games' && <GamesView openGame={openGame} />}
               {section === 'deposit' && <DepositView notify={notify} onBalanceChange={syncBalance} />}
               {section === 'withdraw' && <WithdrawView balance={balance} notify={notify} />}
@@ -386,7 +394,7 @@ export default function Index() {
   );
 }
 
-function HomeView({ balance, setSection, openGame, notify, canClaimBonus }: { balance: number; setSection: (s: Section) => void; openGame: (id: string) => void; notify: (m: string) => void; canClaimBonus?: boolean }) {
+function HomeView({ balance, setSection, openGame, notify, canClaimBonus, user }: { balance: number; setSection: (s: Section) => void; openGame: (id: string) => void; notify: (m: string) => void; canClaimBonus?: boolean; user?: AuthUser | null }) {
   return (
     <div className="space-y-6">
       <div className="animate-float-up relative rounded-3xl glass glow-soft overflow-hidden p-6">
@@ -452,18 +460,20 @@ function HomeView({ balance, setSection, openGame, notify, canClaimBonus }: { ba
         </div>
       </div>
 
-      <div className="animate-float-up relative rounded-2xl overflow-hidden p-5 glow-gold" style={{ animationDelay: '360ms', background: 'linear-gradient(120deg, hsl(348 83% 25%), hsl(240 28% 8%))' }}>
-        <div className="relative z-10">
-          <div className="flex items-center gap-1.5 text-gold text-xs font-semibold uppercase tracking-wider mb-1">
-            <Icon name="Gift" size={14} /> Бонус
+      {!user?.first_deposit_bonus_claimed && (
+        <div className="animate-float-up relative rounded-2xl overflow-hidden p-5 glow-gold" style={{ animationDelay: '360ms', background: 'linear-gradient(120deg, hsl(348 83% 25%), hsl(240 28% 8%))' }}>
+          <div className="relative z-10">
+            <div className="flex items-center gap-1.5 text-gold text-xs font-semibold uppercase tracking-wider mb-1">
+              <Icon name="Gift" size={14} /> Бонус новичка
+            </div>
+            <h3 className="font-display text-2xl font-bold">+100% на первый депозит</h3>
+            <p className="text-sm text-foreground/70 mt-1">Удвой свой стартовый баланс прямо сейчас</p>
+            <button onClick={() => setSection('deposit')} className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-gold hover:opacity-80 transition-opacity">
+              Пополнить и получить бонус <Icon name="ArrowRight" size={16} />
+            </button>
           </div>
-          <h3 className="font-display text-2xl font-bold">+100% на первый депозит</h3>
-          <p className="text-sm text-foreground/70 mt-1">Удвой свой стартовый баланс прямо сейчас</p>
-          <button onClick={() => notify('Активирую бонус')} className="mt-3 inline-flex items-center gap-1 text-sm font-semibold text-gold">
-            Забрать бонус <Icon name="ArrowRight" size={16} />
-          </button>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -560,6 +570,7 @@ function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string)
   const [method, setMethod] = useState<typeof DEPOSIT_METHODS[0] | null>(null);
   const [amount, setAmount] = useState(1000);
   const [customAmount, setCustomAmount] = useState('');
+  const [firstDepositBonus, setFirstDepositBonus] = useState(0);
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [userPhone, setUserPhone] = useState('');
@@ -616,7 +627,22 @@ function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string)
             if (pollRef.current) clearInterval(pollRef.current);
             setPaidAmount(data.amount);
             setOrderNumber(data.order_number);
-            onBalanceChange(data.amount, true);
+            // Читаем бонус первого депозита из ответа balance API
+            const token = localStorage.getItem(AUTH_TOKEN_KEY);
+            if (token) {
+              try {
+                const br = await fetch(`${AUTH_API}?action=balance`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+                  body: JSON.stringify({ delta: data.amount, is_deposit: true }),
+                });
+                if (br.ok) {
+                  const bd = await br.json();
+                  if (bd.first_deposit_bonus > 0) setFirstDepositBonus(bd.first_deposit_bonus);
+                }
+              } catch { /* ignore */ }
+            }
+            onBalanceChange(0, true); // обновляем user (VIP, флаг бонуса), баланс уже обновлён выше
             setStep('success');
             return;
           }
@@ -694,6 +720,19 @@ function DepositView({ notify: _notify, onBalanceChange }: { notify: (m: string)
             <h3 className="font-display text-3xl font-bold gold-text">Оплачено!</h3>
             <p className="text-muted-foreground text-sm mt-1">Баланс пополнен успешно</p>
           </div>
+          {firstDepositBonus > 0 && (
+            <div className="animate-win-pop w-full rounded-2xl p-4 flex items-center gap-3 text-left"
+              style={{ background: 'linear-gradient(120deg, hsl(348 83% 22%), hsl(43 74% 52% / 0.15))' }}>
+              <div className="w-10 h-10 rounded-full gold-gradient flex items-center justify-center shrink-0">
+                <Icon name="Gift" size={20} className="text-background" />
+              </div>
+              <div>
+                <p className="text-xs text-gold/80 font-semibold uppercase tracking-wider">Бонус новичка</p>
+                <p className="font-display font-bold text-xl gold-text">+{firstDepositBonus.toLocaleString('ru')} ₽</p>
+                <p className="text-xs text-muted-foreground">100% бонус за первый депозит</p>
+              </div>
+            </div>
+          )}
           <div className="w-full glass rounded-2xl p-5 space-y-3">
             <div className="font-display text-4xl font-bold gold-text tabular-nums">
               +{paidAmount.toLocaleString('ru')} ₽

@@ -59,7 +59,8 @@ def get_s3():
 def get_user_by_token(cur, token: str):
     cur.execute("""
         SELECT u.id, u.email, u.username, u.balance, u.referral_code,
-               u.vip_level, u.total_deposited, u.cashback_available, u.avatar_url
+               u.vip_level, u.total_deposited, u.cashback_available, u.avatar_url,
+               u.first_deposit_bonus_claimed
         FROM sessions s JOIN users u ON s.user_id = u.id
         WHERE s.token = %s AND s.expires_at > NOW()
     """, (token,))
@@ -83,6 +84,7 @@ def user_to_dict(u) -> dict:
         'next_vip_min': nxt['min'] if nxt else None,
         'next_vip_emoji': nxt['emoji'] if nxt else None,
         'avatar_url': u[8],
+        'first_deposit_bonus_claimed': bool(u[9]) if len(u) > 9 else False,
     }
 
 
@@ -249,12 +251,22 @@ def handler(event: dict, context) -> dict:
         if delta < 0 and vip['cashback_pct'] > 0:
             cashback_earned = round(abs(delta) * vip['cashback_pct'] / 100, 2)
 
+        # Проверяем бонус первого депозита
+        first_deposit_bonus = 0.0
+        if is_deposit and delta > 0:
+            cur.execute("SELECT first_deposit_bonus_claimed FROM users WHERE id = %s", (user[0],))
+            claimed = cur.fetchone()[0]
+            if not claimed:
+                first_deposit_bonus = round(delta * 1.0, 2)  # +100%
+
         # При депозите обновляем total_deposited и пересчитываем vip_level
+        total_credit = delta + first_deposit_bonus
         if is_deposit and delta > 0:
             cur.execute("""
                 UPDATE users
                 SET balance = GREATEST(0, balance + %s),
                     total_deposited = total_deposited + %s,
+                    first_deposit_bonus_claimed = CASE WHEN %s > 0 THEN TRUE ELSE first_deposit_bonus_claimed END,
                     vip_level = CASE
                         WHEN total_deposited + %s >= 500000 THEN 'platinum'
                         WHEN total_deposited + %s >= 100000 THEN 'gold'
@@ -264,7 +276,7 @@ def handler(event: dict, context) -> dict:
                     END,
                     updated_at = NOW()
                 WHERE id = %s RETURNING balance, total_deposited, vip_level
-            """, (delta, delta, delta, delta, delta, delta, user[0]))
+            """, (total_credit, delta, first_deposit_bonus, delta, delta, delta, delta, user[0]))
         elif cashback_earned > 0:
             cur.execute("""
                 UPDATE users
@@ -286,6 +298,7 @@ def handler(event: dict, context) -> dict:
                 'body': json.dumps({
                     'balance': new_balance,
                     'cashback_earned': cashback_earned,
+                    'first_deposit_bonus': first_deposit_bonus,
                 }), 'isBase64Encoded': False}
 
     # ── LOGOUT ──

@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN IF NOT EXISTS first_deposit_bonus_claimed BOOLEAN NOT NULL DEFAULT FALSE;
