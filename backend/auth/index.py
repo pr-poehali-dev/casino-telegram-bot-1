@@ -454,6 +454,96 @@ def handler(event: dict, context) -> dict:
             'last_bonus': last_bonus.isoformat() if last_bonus else None,
         }), 'isBase64Encoded': False}
 
+    # ── SPIN STATUS ──
+    if action == 'spin-status' and http_method == 'GET':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        cur.execute("SELECT last_daily_spin, CURRENT_DATE FROM users WHERE id = %s", (user[0],))
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        last_spin = row[0]
+        today = row[1]
+        can_spin = not last_spin or last_spin < today
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'can_spin': can_spin,
+            'last_spin': last_spin.isoformat() if last_spin else None,
+        }), 'isBase64Encoded': False}
+
+    # ── SPIN (крутим колесо) ──
+    if action == 'spin' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        cur.execute("SELECT last_daily_spin, CURRENT_DATE FROM users WHERE id = %s", (user[0],))
+        row = cur.fetchone()
+        last_spin, today = row[0], row[1]
+
+        if last_spin and last_spin >= today:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'already_spun', 'message': 'Спин уже использован сегодня'}),
+                    'isBase64Encoded': False}
+
+        # Секторы колеса: (label, prize_type, value)
+        # prize_type: 'coins' | 'multiplier' | 'nothing'
+        WHEEL_SECTORS = [
+            {'label': '10 ₽',   'type': 'coins',      'value': 10},
+            {'label': '×2',      'type': 'multiplier', 'value': 2},
+            {'label': '25 ₽',   'type': 'coins',      'value': 25},
+            {'label': 'Ничего',  'type': 'nothing',    'value': 0},
+            {'label': '50 ₽',   'type': 'coins',      'value': 50},
+            {'label': '×1.5',    'type': 'multiplier', 'value': 1.5},
+            {'label': '5 ₽',    'type': 'coins',      'value': 5},
+            {'label': 'Ничего',  'type': 'nothing',    'value': 0},
+            {'label': '100 ₽',  'type': 'coins',      'value': 100},
+            {'label': '×3',      'type': 'multiplier', 'value': 3},
+            {'label': '15 ₽',   'type': 'coins',      'value': 15},
+            {'label': 'Ничего',  'type': 'nothing',    'value': 0},
+        ]
+        # Веса: монеты чаще, ничего реже, большие множители редко
+        weights = [8, 3, 6, 4, 4, 4, 10, 4, 2, 1, 7, 4]
+        sector_idx = random.choices(range(len(WHEEL_SECTORS)), weights=weights, k=1)[0]
+        sector = WHEEL_SECTORS[sector_idx]
+
+        # Вычисляем приз
+        current_balance = float(user[3])
+        prize = 0.0
+        if sector['type'] == 'coins':
+            prize = float(sector['value'])
+        elif sector['type'] == 'multiplier':
+            # Множитель к текущему балансу, но не более 500 ₽
+            prize = min(round(current_balance * (sector['value'] - 1), 2), 500.0)
+            prize = max(prize, 0.0)
+
+        cur.execute("""
+            UPDATE users SET balance = balance + %s, last_daily_spin = %s, updated_at = NOW()
+            WHERE id = %s RETURNING balance
+        """, (prize, today, user[0]))
+        new_balance = float(cur.fetchone()[0])
+        conn.commit(); cur.close(); conn.close()
+
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'sector_idx': sector_idx,
+            'sector': sector,
+            'prize': prize,
+            'balance': new_balance,
+        }), 'isBase64Encoded': False}
+
     # ── RECORD GAME (запись ставки) ──
     if action == 'record-game' and http_method == 'POST':
         if not token:

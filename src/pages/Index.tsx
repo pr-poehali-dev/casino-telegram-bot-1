@@ -18,7 +18,7 @@ import HiLoGame from '@/components/HiLoGame';
 import BingoGame from '@/components/BingoGame';
 import KenoGame from '@/components/KenoGame';
 
-type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard';
+type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard' | 'spin';
 
 const GAMES = [
   { id: 'roulette', name: 'Рулетка', icon: 'CircleDot', desc: 'Красное или чёрное', accent: 'crimson', emoji: '🎡' },
@@ -119,6 +119,7 @@ export default function Index() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [canClaimBonus, setCanClaimBonus] = useState(false);
+  const [canSpin, setCanSpin] = useState(false);
 
   // При старте — восстанавливаем сессию из localStorage
   useEffect(() => {
@@ -127,7 +128,7 @@ export default function Index() {
     fetch(`${AUTH_API}?action=me`, { headers: { 'X-Auth-Token': token } })
       .then(r => r.ok ? r.json() : null)
       .then(data => {
-        if (data?.user) { setUser(data.user); setBalance(data.user.balance); checkDailyBonus(token); }
+        if (data?.user) { setUser(data.user); setBalance(data.user.balance); checkDailyBonus(token); checkSpinStatus(token); }
         else localStorage.removeItem(AUTH_TOKEN_KEY);
       })
       .catch(() => localStorage.removeItem(AUTH_TOKEN_KEY))
@@ -141,11 +142,19 @@ export default function Index() {
       .catch(() => {});
   }, []);
 
+  const checkSpinStatus = useCallback((token: string) => {
+    fetch(`${AUTH_API}?action=spin-status`, { headers: { 'X-Auth-Token': token } })
+      .then(r => r.json())
+      .then(d => setCanSpin(d.can_spin || false))
+      .catch(() => {});
+  }, []);
+
   const handleAuthSuccess = (token: string, u: AuthUser) => {
     localStorage.setItem(AUTH_TOKEN_KEY, token);
     setUser(u);
     setBalance(u.balance);
     checkDailyBonus(token);
+    checkSpinStatus(token);
   };
 
   const handleLogout = async () => {
@@ -347,7 +356,7 @@ export default function Index() {
             />
           ) : (
             <>
-              {section === 'home' && <HomeView balance={balance} setSection={setSection} openGame={openGame} notify={notify} canClaimBonus={canClaimBonus} user={user} />}
+              {section === 'home' && <HomeView balance={balance} setSection={setSection} openGame={openGame} notify={notify} canClaimBonus={canClaimBonus} user={user} canSpin={canSpin} />}
               {section === 'games' && <GamesView openGame={openGame} />}
               {section === 'deposit' && <DepositView notify={notify} onBalanceChange={syncBalance} />}
               {section === 'withdraw' && <WithdrawView balance={balance} notify={notify} />}
@@ -359,6 +368,7 @@ export default function Index() {
               {section === 'daily' && <DailyBonusView onBack={() => setSection('home')} onClaimed={(bonus, balance) => { syncBalance(0); setBalance(balance); setSection('home'); }} />}
               {section === 'history' && <GameHistoryView onBack={() => setSection('profile')} />}
               {section === 'leaderboard' && <LeaderboardView />}
+              {section === 'spin' && <DailySpinView onBack={() => setSection('home')} onClaimed={(prize, bal) => { setBalance(bal); setCanSpin(false); }} />}
             </>
           )}
         </main>
@@ -394,7 +404,7 @@ export default function Index() {
   );
 }
 
-function HomeView({ balance, setSection, openGame, notify, canClaimBonus, user }: { balance: number; setSection: (s: Section) => void; openGame: (id: string) => void; notify: (m: string) => void; canClaimBonus?: boolean; user?: AuthUser | null }) {
+function HomeView({ balance, setSection, openGame, notify, canClaimBonus, user, canSpin }: { balance: number; setSection: (s: Section) => void; openGame: (id: string) => void; notify: (m: string) => void; canClaimBonus?: boolean; user?: AuthUser | null; canSpin?: boolean }) {
   return (
     <div className="space-y-6">
       <div className="animate-float-up relative rounded-3xl glass glow-soft overflow-hidden p-6">
@@ -427,6 +437,22 @@ function HomeView({ balance, setSection, openGame, notify, canClaimBonus, user }
                 <div className="text-xs text-muted-foreground">Нажми и получи до 100 ₽</div>
               </div>
               <Icon name="ChevronRight" size={18} className="text-gold" />
+            </button>
+          )}
+
+          {/* Колесо фортуны */}
+          {canSpin && (
+            <button onClick={() => setSection('spin')}
+              className="mt-2 w-full flex items-center gap-3 rounded-2xl px-4 py-3 border border-purple-400/40 bg-purple-500/5 hover:bg-purple-500/10 transition-all animate-pulse-slow">
+              <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 text-xl"
+                style={{ background: 'linear-gradient(135deg,#a78bfa,#7c3aed)', boxShadow: '0 0 12px #a78bfa50' }}>
+                🎡
+              </div>
+              <div className="text-left flex-1">
+                <div className="text-sm font-bold text-purple-300">Бесплатный спин готов!</div>
+                <div className="text-xs text-muted-foreground">Крути колесо фортуны</div>
+              </div>
+              <Icon name="ChevronRight" size={18} className="text-purple-400" />
             </button>
           )}
         </div>
@@ -1947,6 +1973,7 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
   const items: { name: string; icon: string; action: () => void; danger?: boolean; highlight?: boolean }[] = [
     { name: 'Пополнить баланс', icon: 'Wallet', action: () => setSection('deposit') },
     { name: 'Вывод средств', icon: 'ArrowUpFromLine', action: () => setSection('withdraw') },
+    { name: 'Колесо фортуны 🎡', icon: 'RefreshCw', action: () => setSection('spin'), highlight: true },
     { name: 'История игр', icon: 'History', action: () => setSection('history') },
     { name: 'Пригласить друга', icon: 'UserPlus', action: () => setSection('referral'), highlight: true },
     { name: 'Статистика', icon: 'TrendingUp', action: () => setSection('stats') },
@@ -2656,6 +2683,274 @@ function GameHistoryView({ onBack }: { onBack: () => void }) {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Секторы колеса (должны совпадать с бэкендом) ─────────────────────────────
+const SPIN_SECTORS = [
+  { label: '10 ₽',   color: '#f5c842', textColor: '#1a1a2e', type: 'coins'      },
+  { label: '×2',      color: '#a78bfa', textColor: '#fff',    type: 'multiplier' },
+  { label: '25 ₽',   color: '#34d399', textColor: '#1a1a2e', type: 'coins'      },
+  { label: 'Ничего',  color: '#374151', textColor: '#9ca3af', type: 'nothing'    },
+  { label: '50 ₽',   color: '#f97316', textColor: '#fff',    type: 'coins'      },
+  { label: '×1.5',   color: '#60a5fa', textColor: '#fff',    type: 'multiplier' },
+  { label: '5 ₽',    color: '#fbbf24', textColor: '#1a1a2e', type: 'coins'      },
+  { label: 'Ничего',  color: '#374151', textColor: '#9ca3af', type: 'nothing'    },
+  { label: '100 ₽',  color: '#ef4444', textColor: '#fff',    type: 'coins'      },
+  { label: '×3',      color: '#10b981', textColor: '#fff',    type: 'multiplier' },
+  { label: '15 ₽',   color: '#f59e0b', textColor: '#1a1a2e', type: 'coins'      },
+  { label: 'Ничего',  color: '#374151', textColor: '#9ca3af', type: 'nothing'    },
+];
+const N_SECTORS = SPIN_SECTORS.length;
+const SECTOR_ANGLE = 360 / N_SECTORS;
+
+function SpinWheelSvg({ rotation, size = 288 }: { rotation: number; size?: number }) {
+  const cx = size / 2, cy = size / 2, r = size / 2 - 3;
+  return (
+    <svg width={size} height={size} style={{ transform: `rotate(${rotation}deg)`, display: 'block' }}>
+      {SPIN_SECTORS.map((s, i) => {
+        const a1 = (i * SECTOR_ANGLE - 90) * (Math.PI / 180);
+        const a2 = ((i + 1) * SECTOR_ANGLE - 90) * (Math.PI / 180);
+        const x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+        const x2 = cx + r * Math.cos(a2), y2 = cy + r * Math.sin(a2);
+        const ma = ((i + 0.5) * SECTOR_ANGLE - 90) * (Math.PI / 180);
+        const tr = r * 0.67, tx = cx + tr * Math.cos(ma), ty = cy + tr * Math.sin(ma);
+        const rot = (i + 0.5) * SECTOR_ANGLE;
+        return (
+          <g key={i}>
+            <path d={`M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 0 1 ${x2} ${y2} Z`}
+              fill={s.color} stroke="rgba(0,0,0,0.2)" strokeWidth="1.5" />
+            <text x={tx} y={ty} textAnchor="middle" dominantBaseline="middle"
+              fill={s.textColor} fontSize={size * 0.048} fontWeight="bold"
+              fontFamily="Oswald,sans-serif"
+              transform={`rotate(${rot},${tx},${ty})`}>
+              {s.label}
+            </text>
+          </g>
+        );
+      })}
+      <circle cx={cx} cy={cy} r={size * 0.065} fill="#1a1a2e" stroke="hsl(43 74% 52%)" strokeWidth="3" />
+      <circle cx={cx} cy={cy} r={size * 0.028} fill="hsl(43 74% 52%)" />
+    </svg>
+  );
+}
+
+function DailySpinView({ onBack, onClaimed }: { onBack: () => void; onClaimed: (prize: number, balance: number) => void }) {
+  const [phase, setPhase] = useState<'idle' | 'spinning' | 'result'>('idle');
+  const [rotation, setRotation] = useState(0);
+  const [sectorIdx, setSectorIdx] = useState<number | null>(null);
+  const [prize, setPrize] = useState(0);
+  const [newBalance, setNewBalance] = useState(0);
+  const [error, setError] = useState('');
+  const [canSpin, setCanSpin] = useState(true);
+  const rotRef = useRef(0);
+  const rafRef = useRef<number>(0);
+  const ctxRef = useRef<AudioContext | null>(null);
+
+  // Проверяем статус при открытии
+  useEffect(() => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!token) return;
+    fetch(`${AUTH_API}?action=spin-status`, { headers: { 'X-Auth-Token': token } })
+      .then(r => r.json())
+      .then(d => setCanSpin(d.can_spin ?? true))
+      .catch(() => {});
+  }, []);
+
+  function audio() {
+    if (!ctxRef.current) {
+      try {
+        const C = window.AudioContext || (window as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        ctxRef.current = C ? new C() : null;
+      } catch { ctxRef.current = null; }
+    }
+    return ctxRef.current;
+  }
+  function playTick() {
+    const ctx = audio(); if (!ctx) return;
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.connect(g); g.connect(ctx.destination);
+    o.type = 'triangle'; o.frequency.value = 800 + Math.random() * 200;
+    g.gain.setValueAtTime(0.06, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.04);
+    o.start(); o.stop(ctx.currentTime + 0.04);
+  }
+  function playWinSound(big: boolean) {
+    const ctx = audio(); if (!ctx) return;
+    const notes = big ? [523,659,784,1047,1319] : [523,659,784];
+    notes.forEach((f, i) => {
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.type = 'sine'; o.frequency.value = f;
+      const t = ctx.currentTime + i * 0.09;
+      g.gain.setValueAtTime(0.15, t); g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+      o.start(t); o.stop(t + 0.25);
+    });
+  }
+
+  async function doSpin() {
+    if (phase !== 'idle' || !canSpin) return;
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!token) { setError('Войдите в аккаунт'); return; }
+
+    setPhase('spinning'); setError('');
+
+    // Запрос к бэкенду
+    let targetIdx = Math.floor(Math.random() * N_SECTORS); // fallback
+    let prizeVal = 0, balanceVal = 0;
+    try {
+      const res = await fetch(`${AUTH_API}?action=spin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+        body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.message || data.error || 'Ошибка');
+        setPhase('idle');
+        if (data.error === 'already_spun') setCanSpin(false);
+        return;
+      }
+      targetIdx = data.sector_idx;
+      prizeVal  = data.prize;
+      balanceVal = data.balance;
+    } catch {
+      setError('Ошибка сети');
+      setPhase('idle');
+      return;
+    }
+
+    // Анимация — рассчитываем угол остановки
+    const targetAngle = 360 - ((targetIdx + 0.5) * SECTOR_ANGLE) % 360;
+    const extraSpins = (5 + Math.floor(Math.random() * 3)) * 360;
+    const finalAngle = rotRef.current + extraSpins + ((targetAngle - rotRef.current % 360) + 360) % 360;
+    const duration = 4500;
+    const startRot = rotRef.current;
+    const startTime = performance.now();
+    let lastTick = startRot;
+
+    const animate = (now: number) => {
+      const t = Math.min((now - startTime) / duration, 1);
+      const ease = t < 0.5 ? 8 * t ** 4 : 1 - (-2 * t + 2) ** 4 / 2;
+      const cur = startRot + (finalAngle - startRot) * ease;
+      rotRef.current = cur;
+      setRotation(cur);
+      if (Math.floor(cur / SECTOR_ANGLE) !== Math.floor(lastTick / SECTOR_ANGLE)) {
+        playTick(); lastTick = cur;
+      }
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(animate);
+      } else {
+        rotRef.current = finalAngle;
+        setRotation(finalAngle);
+        setSectorIdx(targetIdx);
+        setPrize(prizeVal);
+        setNewBalance(balanceVal);
+        setCanSpin(false);
+        setPhase('result');
+        playWinSound(prizeVal >= 50);
+        onClaimed(prizeVal, balanceVal);
+      }
+    };
+    rafRef.current = requestAnimationFrame(animate);
+  }
+
+  useEffect(() => () => { cancelAnimationFrame(rafRef.current); }, []);
+
+  const resultSector = sectorIdx !== null ? SPIN_SECTORS[sectorIdx] : null;
+
+  return (
+    <div className="space-y-4 animate-float-up">
+      {/* Шапка */}
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold shrink-0">
+          <Icon name="ArrowLeft" size={20} />
+        </button>
+        <div className="flex-1">
+          <h2 className="font-display text-xl font-bold">Колесо фортуны 🎡</h2>
+          <p className="text-xs text-muted-foreground">Бесплатный спин каждый день</p>
+        </div>
+        {!canSpin && (
+          <span className="text-xs text-muted-foreground glass px-3 py-1.5 rounded-lg">Завтра</span>
+        )}
+      </div>
+
+      {/* Колесо */}
+      <div className="flex flex-col items-center gap-2">
+        {/* Стрелка */}
+        <div className="w-0 h-0" style={{ borderLeft: '10px solid transparent', borderRight: '10px solid transparent', borderTop: '22px solid hsl(43 74% 52%)' }} />
+        <div className="rounded-full p-1" style={{ background: 'radial-gradient(circle, hsl(43 74% 52% / 0.12), transparent 70%)', boxShadow: phase === 'spinning' ? '0 0 40px hsl(43 74% 52% / 0.4)' : '0 0 18px hsl(43 74% 52% / 0.15)' }}>
+          <SpinWheelSvg rotation={rotation} size={288} />
+        </div>
+      </div>
+
+      {/* Результат */}
+      {phase === 'result' && resultSector && (
+        <div className={`animate-win-pop glass rounded-2xl p-4 text-center border ${
+          resultSector.type === 'nothing' ? 'border-white/10' :
+          resultSector.type === 'multiplier' ? 'border-purple-400/40' : 'border-gold/40 glow-gold'
+        }`}>
+          {resultSector.type === 'nothing' ? (
+            <p className="text-muted-foreground font-display text-lg font-bold">Ничего не выпало 😔</p>
+          ) : resultSector.type === 'multiplier' ? (
+            <>
+              <p className="text-purple-400 font-display text-xl font-bold">🎉 {resultSector.label} к балансу!</p>
+              {prize > 0 && <p className="text-emerald-400 font-bold text-lg mt-1">+{prize.toLocaleString('ru')} ₽</p>}
+            </>
+          ) : (
+            <p className="gold-text font-display text-2xl font-bold">🎉 +{prize.toLocaleString('ru')} ₽</p>
+          )}
+          <p className="text-xs text-muted-foreground mt-1">Баланс: {newBalance.toLocaleString('ru')} ₽</p>
+        </div>
+      )}
+
+      {/* Ошибка */}
+      {error && (
+        <div className="glass rounded-xl p-3 flex items-center gap-2 text-sm text-red-400 border border-red-500/20">
+          <Icon name="AlertCircle" size={15} /> {error}
+        </div>
+      )}
+
+      {/* Кнопка */}
+      {phase !== 'result' && (
+        <button onClick={doSpin} disabled={phase === 'spinning' || !canSpin}
+          className="w-full h-14 rounded-2xl font-display font-bold text-xl gold-gradient text-background glow-gold disabled:opacity-50 flex items-center justify-center gap-3 transition-all">
+          {phase === 'spinning'
+            ? <><Icon name="Loader" size={22} className="animate-spin" /> Крутим...</>
+            : canSpin
+              ? <><Icon name="RefreshCw" size={22} /> Крутить бесплатно!</>
+              : <><Icon name="Clock" size={22} /> Спин уже использован</>
+          }
+        </button>
+      )}
+      {phase === 'result' && (
+        <button onClick={onBack}
+          className="w-full h-14 rounded-2xl font-display font-bold text-xl gold-gradient text-background glow-gold flex items-center justify-center gap-3">
+          <Icon name="Check" size={22} /> Отлично!
+        </button>
+      )}
+
+      {/* Легенда */}
+      <div className="glass rounded-2xl p-4">
+        <p className="text-xs text-muted-foreground uppercase tracking-wider mb-3">Возможные призы</p>
+        <div className="grid grid-cols-2 gap-y-2 gap-x-4">
+          {[
+            { label: '100 ₽', color: '#ef4444' },
+            { label: '×3 к балансу', color: '#10b981' },
+            { label: '50 ₽', color: '#f97316' },
+            { label: '×2 к балансу', color: '#a78bfa' },
+            { label: '25 ₽', color: '#34d399' },
+            { label: '×1.5 к балансу', color: '#60a5fa' },
+          ].map(r => (
+            <div key={r.label} className="flex items-center gap-2 text-sm">
+              <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: r.color }} />
+              <span className="text-muted-foreground">{r.label}</span>
+            </div>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground/60 mt-3">Множители применяются к текущему балансу (макс. 500 ₽)</p>
+      </div>
     </div>
   );
 }
