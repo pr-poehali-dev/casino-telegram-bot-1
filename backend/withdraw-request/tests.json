@@ -16,6 +16,28 @@
       "bodyMatcher": "partial"
     },
     {
+      "name": "Amount below minimum returns 400",
+      "method": "POST",
+      "path": "/",
+      "body": {"method": "card", "destination": "1234567890123456", "amount": 50},
+      "expectedStatus": 400
+    },
+    {
+      "name": "Amount above maximum returns 400",
+      "method": "POST",
+      "path": "/",
+      "body": {"method": "card", "destination": "1234567890123456", "amount": 999999},
+      "expectedStatus": 400
+    },
+    {
+      "name": "GET limits action returns limits",
+      "method": "GET",
+      "path": "/?action=limits",
+      "expectedStatus": 200,
+      "expectedBody": {"min_withdraw": 100, "max_withdraw": 50000, "daily_limit": 100000},
+      "bodyMatcher": "partial"
+    },
+    {
       "name": "GET without withdrawal_id returns 400",
       "method": "GET",
       "path": "/",

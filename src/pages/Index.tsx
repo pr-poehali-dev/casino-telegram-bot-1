@@ -1167,6 +1167,20 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
   const [loading, setLoading] = useState(false);
   const pollRef = useRef<number | null>(null);
 
+  // Лимиты вывода
+  const [limits, setLimits] = useState<{
+    min_withdraw: number; max_withdraw: number;
+    daily_limit: number; daily_used: number; daily_left: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+    fetch(`${WITHDRAW_API}?action=limits`, { headers: { 'X-Auth-Token': token } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setLimits(d); })
+      .catch(() => {});
+  }, []);
+
   // История выводов
   interface WdHistoryItem { id: number; request_number: string; method: string; destination: string; amount: number; status: string; created_at: string; updated_at: string; }
   const [history, setHistory] = useState<WdHistoryItem[]>([]);
@@ -1453,8 +1467,10 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
 
   // ── FORM ──
   if (step === 'form' && method) {
-    const valid = parsedAmount >= method.min && parsedAmount <= balance && destination.length >= 8;
-    const presets = [500, 1000, 2000, 5000].filter(v => v <= balance);
+    const minAmt = Math.max(method.min, limits?.min_withdraw ?? method.min);
+    const maxAmt = Math.min(balance, limits?.max_withdraw ?? 50000, limits?.daily_left ?? 100000);
+    const valid = parsedAmount >= minAmt && parsedAmount <= maxAmt && destination.length >= 8;
+    const presets = [500, 1000, 2000, 5000].filter(v => v <= maxAmt);
     return (
       <div className="space-y-5">
         <div className="flex items-center gap-3 animate-float-up">
@@ -1484,7 +1500,7 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
         <div className="animate-float-up space-y-3" style={{ animationDelay: '80ms' }}>
           <div>
             <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Сумма вывода</label>
-            <input className={inputCls + ' font-display text-lg'} placeholder={`Минимум ${method.min.toLocaleString('ru')} ₽`}
+            <input className={inputCls + ' font-display text-lg'} placeholder={`${minAmt.toLocaleString('ru')} – ${maxAmt.toLocaleString('ru')} ₽`}
               value={amount} onChange={e => setAmount(e.target.value.replace(/\D/g, ''))} inputMode="numeric" />
           </div>
           {presets.length > 0 && (
@@ -1530,9 +1546,24 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
             </div>
           </div>
 
+          {parsedAmount > 0 && parsedAmount < minAmt && (
+            <div className="flex items-center gap-2 text-xs text-red-400">
+              <Icon name="AlertCircle" size={14} /> Минимальная сумма — {minAmt.toLocaleString('ru')} ₽
+            </div>
+          )}
           {parsedAmount > balance && (
             <div className="flex items-center gap-2 text-xs text-red-400">
               <Icon name="AlertCircle" size={14} /> Сумма превышает доступный баланс
+            </div>
+          )}
+          {parsedAmount > 0 && parsedAmount <= balance && limits && parsedAmount > limits.max_withdraw && (
+            <div className="flex items-center gap-2 text-xs text-red-400">
+              <Icon name="AlertCircle" size={14} /> Максимум за одну заявку — {limits.max_withdraw.toLocaleString('ru')} ₽
+            </div>
+          )}
+          {parsedAmount > 0 && parsedAmount <= balance && limits && parsedAmount > limits.daily_left && (
+            <div className="flex items-center gap-2 text-xs text-amber-400">
+              <Icon name="AlertTriangle" size={14} /> Суточный лимит почти исчерпан. Осталось {limits.daily_left.toLocaleString('ru')} ₽
             </div>
           )}
         </div>
@@ -1546,6 +1577,18 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
             <span className="text-muted-foreground">Время обработки</span>
             <span className="font-medium">{method.time}</span>
           </div>
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">Мин. / Макс.</span>
+            <span className="font-medium">{minAmt.toLocaleString('ru')} / {(limits?.max_withdraw ?? 50000).toLocaleString('ru')} ₽</span>
+          </div>
+          {limits && limits.daily_used > 0 && (
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Осталось сегодня</span>
+              <span className={`font-medium ${limits.daily_left < 5000 ? 'text-amber-400' : 'text-emerald-400'}`}>
+                {limits.daily_left.toLocaleString('ru')} ₽
+              </span>
+            </div>
+          )}
         </div>
 
         <Button onClick={() => setStep('confirm')} disabled={!valid}
@@ -1612,6 +1655,46 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
         <div className="animate-float-up glass rounded-2xl p-6 flex flex-col items-center gap-3 text-center">
           <Icon name="TrendingUp" size={32} className="text-gold/40" />
           <p className="text-muted-foreground text-sm">Сыграй и выиграй, чтобы вывести средства</p>
+        </div>
+      )}
+
+      {/* Лимиты */}
+      {limits && (
+        <div className="animate-float-up glass rounded-2xl p-4 space-y-2.5" style={{ animationDelay: '200ms' }}>
+          <p className="text-xs text-muted-foreground uppercase tracking-wider">Лимиты вывода</p>
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Минимальная заявка</span>
+              <span className="font-semibold">{limits.min_withdraw.toLocaleString('ru')} ₽</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Максимальная заявка</span>
+              <span className="font-semibold">{limits.max_withdraw.toLocaleString('ru')} ₽</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Суточный лимит</span>
+              <span className="font-semibold">{limits.daily_limit.toLocaleString('ru')} ₽</span>
+            </div>
+            <div className="w-full h-px bg-white/5" />
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Использовано сегодня</span>
+              <span className={limits.daily_used > 0 ? 'font-semibold text-amber-400' : 'font-semibold text-emerald-400'}>
+                {limits.daily_used.toLocaleString('ru')} ₽
+              </span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Осталось сегодня</span>
+              <span className="font-semibold text-emerald-400">{limits.daily_left.toLocaleString('ru')} ₽</span>
+            </div>
+          </div>
+          {/* Прогресс-бар суточного лимита */}
+          <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
+            <div className="h-full rounded-full transition-all"
+              style={{
+                width: `${Math.min(100, (limits.daily_used / limits.daily_limit) * 100)}%`,
+                background: limits.daily_used / limits.daily_limit > 0.8 ? '#ef4444' : 'hsl(43 74% 52%)',
+              }} />
+          </div>
         </div>
       )}
 

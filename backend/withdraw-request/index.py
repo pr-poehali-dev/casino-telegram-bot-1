@@ -18,6 +18,14 @@ STATUS_LABELS = {
     'rejected':   '❌ Отклонено',
 }
 
+# ── Лимиты вывода ──────────────────────────────────────────────────────────────
+MIN_WITHDRAW     = 100       # минимальная сумма одной заявки (₽)
+MAX_WITHDRAW     = 50_000    # максимальная сумма одной заявки (₽)
+DAILY_LIMIT      = 100_000   # суточный лимит на все заявки (₽)
+MIN_BALANCE_KEEP = 0         # минимальный остаток после вывода (₽)
+# Минимум игр до первого вывода (защита от регистрации ради бонуса)
+MIN_GAMES_BEFORE_WITHDRAW = 5
+
 
 def send_telegram(chat_id: str, text: str):
     token = os.environ.get('TELEGRAM_BOT_TOKEN', '')
@@ -34,17 +42,18 @@ def send_telegram(chat_id: str, text: str):
 
 def get_user_by_token(cur, token: str):
     cur.execute("""
-        SELECT u.id FROM sessions s JOIN users u ON s.user_id = u.id
+        SELECT u.id, u.balance, u.daily_withdrawn, u.daily_withdraw_date
+        FROM sessions s JOIN users u ON s.user_id = u.id
         WHERE s.token = %s AND s.expires_at > NOW()
     """, (token,))
-    row = cur.fetchone()
-    return row[0] if row else None
+    return cur.fetchone()
 
 
 def handler(event: dict, context) -> dict:
     """
-    POST — создаёт заявку на вывод средств.
-    GET ?withdrawal_id=N — возвращает статус заявки (для поллинга игроком).
+    POST — создаёт заявку на вывод средств с проверкой лимитов.
+    GET ?withdrawal_id=N — статус заявки.
+    GET ?action=limits — текущие лимиты и дневной остаток пользователя.
     """
     if event.get('httpMethod') == 'OPTIONS':
         return {'statusCode': 200, 'headers': HEADERS, 'body': '', 'isBase64Encoded': False}
@@ -52,21 +61,45 @@ def handler(event: dict, context) -> dict:
     token = (event.get('headers') or {}).get('X-Auth-Token') or \
             (event.get('headers') or {}).get('x-auth-token', '')
     method_http = event.get('httpMethod', 'POST').upper()
+    params = event.get('queryStringParameters') or {}
 
-    conn = psycopg2.connect(os.environ['DATABASE_URL'])
-    cur = conn.cursor()
+    try:
+        conn = psycopg2.connect(os.environ['DATABASE_URL'])
+        cur = conn.cursor()
+    except Exception as e:
+        return {'statusCode': 503, 'headers': HEADERS,
+                'body': json.dumps({'error': 'Сервер временно недоступен'}), 'isBase64Encoded': False}
+
+    # ── GET: лимиты пользователя ──
+    if method_http == 'GET' and params.get('action') == 'limits':
+        user = get_user_by_token(cur, token) if token else None
+        cur.execute("SELECT CURRENT_DATE")
+        today = cur.fetchone()[0]
+        cur.close(); conn.close()
+
+        daily_used = 0.0
+        if user:
+            last_date = user[3]
+            daily_used = float(user[2]) if last_date and last_date >= today else 0.0
+
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'min_withdraw':  MIN_WITHDRAW,
+            'max_withdraw':  MAX_WITHDRAW,
+            'daily_limit':   DAILY_LIMIT,
+            'daily_used':    daily_used,
+            'daily_left':    max(0.0, DAILY_LIMIT - daily_used),
+        }), 'isBase64Encoded': False}
 
     # ── GET: статус заявки ──
     if method_http == 'GET':
-        params = event.get('queryStringParameters') or {}
         withdrawal_id = params.get('withdrawal_id')
         if not withdrawal_id:
-            conn.close()
+            cur.close(); conn.close()
             return {'statusCode': 400, 'headers': HEADERS,
                     'body': json.dumps({'error': 'withdrawal_id required'}), 'isBase64Encoded': False}
 
-        # Проверяем что заявка принадлежит этому пользователю
-        user_id = get_user_by_token(cur, token) if token else None
+        user = get_user_by_token(cur, token) if token else None
+        user_id = user[0] if user else None
         if user_id:
             cur.execute("""
                 SELECT id, status, amount, request_number, updated_at
@@ -79,38 +112,112 @@ def handler(event: dict, context) -> dict:
             """, (withdrawal_id,))
 
         row = cur.fetchone()
-        conn.close()
+        cur.close(); conn.close()
         if not row:
             return {'statusCode': 404, 'headers': HEADERS,
                     'body': json.dumps({'error': 'Not found'}), 'isBase64Encoded': False}
 
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
-            'id': row[0],
-            'status': row[1],
+            'id': row[0], 'status': row[1],
             'status_label': STATUS_LABELS.get(row[1], row[1]),
-            'amount': float(row[2]),
-            'request_number': row[3],
+            'amount': float(row[2]), 'request_number': row[3],
             'updated_at': row[4].isoformat() if row[4] else None,
         }), 'isBase64Encoded': False}
 
     # ── POST: создать заявку ──
-    payload = json.loads(event.get('body') or '{}')
+    try:
+        payload = json.loads(event.get('body') or '{}')
+    except Exception:
+        payload = {}
 
-    method = str(payload.get('method', ''))
+    method   = str(payload.get('method', ''))
     destination = str(payload.get('destination', ''))
-    amount = float(payload.get('amount', 0))
-    user_name = str(payload.get('user_name', ''))
-    user_email = str(payload.get('user_email', ''))
+    user_name   = str(payload.get('user_name', ''))
+    user_email  = str(payload.get('user_email', ''))
     user_telegram = str(payload.get('user_telegram', ''))
 
+    try:
+        amount = float(payload.get('amount', 0))
+    except (ValueError, TypeError):
+        amount = 0.0
+
+    # Базовая валидация полей
     if not method or not destination or amount <= 0:
-        conn.close()
+        cur.close(); conn.close()
         return {'statusCode': 400, 'headers': HEADERS,
                 'body': json.dumps({'error': 'method, destination и amount обязательны'}),
                 'isBase64Encoded': False}
 
-    # Получаем user_id по токену если передан
-    user_id = get_user_by_token(cur, token) if token else None
+    # ── Проверки лимитов ──────────────────────────────────────────────────────
+    if amount < MIN_WITHDRAW:
+        cur.close(); conn.close()
+        return {'statusCode': 400, 'headers': HEADERS,
+                'body': json.dumps({'error': f'Минимальная сумма вывода — {MIN_WITHDRAW:,} ₽'.replace(',', ' ')}),
+                'isBase64Encoded': False}
+
+    if amount > MAX_WITHDRAW:
+        cur.close(); conn.close()
+        return {'statusCode': 400, 'headers': HEADERS,
+                'body': json.dumps({'error': f'Максимальная сумма одной заявки — {MAX_WITHDRAW:,} ₽'.replace(',', ' ')}),
+                'isBase64Encoded': False}
+
+    # Авторизованный пользователь — дополнительные проверки
+    user = get_user_by_token(cur, token) if token else None
+
+    if user:
+        user_id    = user[0]
+        balance    = float(user[1])
+        daily_used = float(user[2])
+        last_date  = user[3]
+
+        # Получаем сегодняшнюю дату из БД
+        cur.execute("SELECT CURRENT_DATE")
+        today = cur.fetchone()[0]
+
+        # Сбрасываем суточный счётчик если новый день
+        if not last_date or last_date < today:
+            daily_used = 0.0
+
+        # Проверка баланса
+        if amount > balance - MIN_BALANCE_KEEP:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Недостаточно средств на балансе'}),
+                    'isBase64Encoded': False}
+
+        # Суточный лимит
+        if daily_used + amount > DAILY_LIMIT:
+            left = max(0.0, DAILY_LIMIT - daily_used)
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({
+                        'error': f'Суточный лимит вывода {DAILY_LIMIT:,} ₽ превышен. Сегодня осталось: {left:,.0f} ₽'.replace(',', ' ')
+                    }), 'isBase64Encoded': False}
+
+        # Минимум игр до вывода
+        cur.execute("SELECT COUNT(*) FROM game_history WHERE user_id = %s", (user_id,))
+        games_count = cur.fetchone()[0]
+        if games_count < MIN_GAMES_BEFORE_WITHDRAW:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({
+                        'error': f'Для вывода нужно сыграть минимум {MIN_GAMES_BEFORE_WITHDRAW} игр (сыграно: {games_count})'
+                    }), 'isBase64Encoded': False}
+
+        # Списываем с баланса и обновляем суточный счётчик
+        cur.execute("""
+            UPDATE users
+            SET balance             = balance - %s,
+                daily_withdrawn     = CASE WHEN daily_withdraw_date = CURRENT_DATE
+                                          THEN daily_withdrawn + %s
+                                          ELSE %s END,
+                daily_withdraw_date = CURRENT_DATE,
+                updated_at          = NOW()
+            WHERE id = %s
+        """, (amount, amount, amount, user_id))
+
+    else:
+        user_id = None
 
     request_number = f"WD-{datetime.now().strftime('%Y%m%d%H%M%S')}"
     amount_str = f"{amount:,.0f}".replace(',', ' ')
@@ -120,11 +227,11 @@ def handler(event: dict, context) -> dict:
                                  method, destination, amount, status, user_id)
         VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s)
         RETURNING id
-    """, (request_number, user_name, user_email, user_telegram, method, destination, amount, user_id))
+    """, (request_number, user_name, user_email, user_telegram,
+          method, destination, amount, user_id))
     withdrawal_id = cur.fetchone()[0]
     conn.commit()
-    cur.close()
-    conn.close()
+    cur.close(); conn.close()
 
     # Уведомление владельцу в Telegram
     owner_chat_id = os.environ.get('TELEGRAM_OWNER_CHAT_ID', '')
