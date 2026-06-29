@@ -103,10 +103,19 @@ def handler(event: dict, context) -> dict:
     params = event.get('queryStringParameters') or {}
     action = params.get('action', '')
     token = event.get('headers', {}).get('X-Auth-Token', '')
-    body = json.loads(event.get('body') or '{}')
+    try:
+        body = json.loads(event.get('body') or '{}')
+    except Exception:
+        body = {}
 
-    conn = get_conn()
-    cur = conn.cursor()
+    try:
+        conn = get_conn()
+        cur = conn.cursor()
+    except Exception as e:
+        print(f'DB connection error: {e}')
+        return {'statusCode': 503, 'headers': HEADERS,
+                'body': json.dumps({'error': 'Сервер временно недоступен, попробуйте снова'}),
+                'isBase64Encoded': False}
 
     # ── REGISTER ──
     if action == 'register' and http_method == 'POST':

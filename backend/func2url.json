@@ -1,7 +1,3 @@
 {
-  "auth": "https://functions.poehali.dev/e956557c-ce79-4797-8cec-5934cb2924d8",
-  "admin-withdrawals": "https://functions.poehali.dev/fc579833-522a-4863-abbc-24eece05648f",
-  "withdraw-request": "https://functions.poehali.dev/5264284f-4bd1-4c29-9530-a9fd03734d4d",
-  "robokassa-robokassa-webhook": "https://functions.poehali.dev/1dca41ce-8c98-41b7-a696-6c81b877f905",
-  "robokassa-robokassa": "https://functions.poehali.dev/ed14271a-993b-4abb-a021-fd5ba53c863d"
+  "auth": "https://functions.poehali.dev/e956557c-ce79-4797-8cec-5934cb2924d8"
 }
