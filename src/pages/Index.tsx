@@ -18,7 +18,7 @@ import HiLoGame from '@/components/HiLoGame';
 import BingoGame from '@/components/BingoGame';
 import KenoGame from '@/components/KenoGame';
 
-type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard' | 'spin' | 'verify-email' | 'verify-phone' | 'achievements';
+type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard' | 'spin' | 'verify-email' | 'verify-phone' | 'achievements' | 'loyalty';
 
 const GAMES = [
   { id: 'roulette', name: 'Рулетка', icon: 'CircleDot', desc: 'Красное или чёрное', accent: 'crimson', emoji: '🎡' },
@@ -60,6 +60,16 @@ interface AuthUser {
   email_verified?: boolean;
   phone?: string | null;
   phone_verified?: boolean;
+  loyalty_points?: number;
+  loyalty_points_lifetime?: number;
+  loyalty_level?: string;
+  loyalty_label?: string;
+  loyalty_emoji?: string;
+  loyalty_multiplier?: number;
+  loyalty_next_level?: string | null;
+  loyalty_next_label?: string | null;
+  loyalty_next_min?: number | null;
+  loyalty_next_emoji?: string | null;
 }
 
 interface Achievement {
@@ -247,6 +257,14 @@ export default function Index() {
           fetch(`${AUTH_API}?action=me`, { headers: { 'X-Auth-Token': token } })
             .then(r => r.json()).then(d => { if (d.user) setUser(d.user); }).catch(() => {});
         }
+        // Начислены очки лояльности за ставку — обновляем локально без лишнего запроса
+        if (data.loyalty_earned > 0) {
+          setUser(prev => prev ? {
+            ...prev,
+            loyalty_points: (prev.loyalty_points || 0) + data.loyalty_earned,
+            loyalty_points_lifetime: (prev.loyalty_points_lifetime || 0) + data.loyalty_earned,
+          } : prev);
+        }
       } else {
         // Сервер отклонил операцию — откатываем оптимистичное изменение
         // и подтягиваем реальный баланс из БД
@@ -427,6 +445,7 @@ export default function Index() {
               {section === 'verify-email' && <EmailVerifyView user={user} onBack={() => setSection('profile')} onVerified={() => handleUserUpdate({ email_verified: true })} />}
               {section === 'verify-phone' && <PhoneVerifyView user={user} onBack={() => setSection('withdraw')} onVerified={() => handleUserUpdate({ phone_verified: true })} />}
               {section === 'achievements' && <AchievementsView onBack={() => setSection('profile')} />}
+              {section === 'loyalty' && <LoyaltyView onBack={() => setSection('profile')} onBalanceChange={syncBalance} onUserUpdate={handleUserUpdate} />}
             </>
           )}
         </main>
@@ -2161,6 +2180,7 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
     { name: 'Колесо фортуны 🎡', icon: 'RefreshCw', action: () => setSection('spin'), highlight: true },
     { name: 'История игр', icon: 'History', action: () => setSection('history') },
     { name: 'Достижения 🏆', icon: 'Award', action: () => setSection('achievements') },
+    { name: 'Программа лояльности ⭐', icon: 'Star', action: () => setSection('loyalty'), highlight: true },
     { name: 'Пригласить друга', icon: 'UserPlus', action: () => setSection('referral'), highlight: true },
     { name: 'Статистика', icon: 'TrendingUp', action: () => setSection('stats') },
     { name: 'Поддержка', icon: 'Headphones', action: () => setSection('support') },
@@ -2257,11 +2277,17 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
               </button>
             )}
           </p>
-          <span className="inline-flex items-center gap-1.5 mt-2 text-xs font-bold px-3 py-1 rounded-full"
-            style={{ color: vipColor, background: `${vipColor}18`, border: `1px solid ${vipColor}44` }}>
-            {user?.vip_emoji || '⬜'} {user?.vip_label || 'Нет уровня'}
-            {(user?.vip_cashback_pct || 0) > 0 && <span className="opacity-70">· {user?.vip_cashback_pct}% кешбэк</span>}
-          </span>
+          <div className="flex items-center gap-1.5 mt-2 flex-wrap justify-center">
+            <span className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1 rounded-full"
+              style={{ color: vipColor, background: `${vipColor}18`, border: `1px solid ${vipColor}44` }}>
+              {user?.vip_emoji || '⬜'} {user?.vip_label || 'Нет уровня'}
+              {(user?.vip_cashback_pct || 0) > 0 && <span className="opacity-70">· {user?.vip_cashback_pct}% кешбэк</span>}
+            </span>
+            <button onClick={() => setSection('loyalty')}
+              className="inline-flex items-center gap-1 text-xs font-bold px-3 py-1 rounded-full bg-gold/15 text-gold border border-gold/30 hover:bg-gold/25 transition-colors">
+              ⭐ {(user?.loyalty_points || 0).toLocaleString('ru')} очков
+            </button>
+          </div>
         </div>
       </div>
 
@@ -3353,6 +3379,207 @@ function AchievementsView({ onBack }: { onBack: () => void }) {
             </div>
           </div>
         ))
+      )}
+    </div>
+  );
+}
+
+interface LoyaltyLevelInfo { name: string; label: string; min_points: number; multiplier: number; color: string; emoji: string; }
+interface LoyaltyData {
+  points: number; points_lifetime: number;
+  level: string; level_label: string; level_emoji: string; multiplier: number;
+  next_level: string | null; next_level_label: string | null; next_level_min: number | null; next_level_emoji: string | null;
+  points_per_rub: number; redeem_rate: number; min_redeem: number;
+  all_levels: LoyaltyLevelInfo[];
+  history: { points: number; amount: number; created_at: string }[];
+}
+
+function LoyaltyView({ onBack, onBalanceChange, onUserUpdate }: {
+  onBack: () => void;
+  onBalanceChange: (delta: number) => void;
+  onUserUpdate: (u: Partial<AuthUser>) => void;
+}) {
+  const [data, setData] = useState<LoyaltyData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [redeemAmount, setRedeemAmount] = useState('');
+  const [redeeming, setRedeeming] = useState(false);
+
+  const load = () => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+    fetch(`${AUTH_API}?action=loyalty`, { headers: { 'X-Auth-Token': token } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d) setData(d); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(load, []);
+
+  const parsedPoints = parseInt(redeemAmount) || 0;
+  const redeemValue = data ? Math.round(parsedPoints * data.redeem_rate * 100) / 100 : 0;
+  const canRedeem = !!data && parsedPoints >= data.min_redeem && parsedPoints <= data.points;
+
+  const handleRedeem = async () => {
+    if (!canRedeem) return;
+    setRedeeming(true);
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+    try {
+      const res = await fetch(`${AUTH_API}?action=redeem-loyalty`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+        body: JSON.stringify({ points: parsedPoints }),
+      });
+      const d = await res.json();
+      if (res.ok) {
+        toast.success(`Обменяно на ${d.amount.toLocaleString('ru')} ₽`);
+        onBalanceChange(d.amount);
+        onUserUpdate({ loyalty_points: d.remaining_points });
+        setRedeemAmount('');
+        load();
+      } else {
+        toast.error(d.error || 'Не удалось обменять очки');
+      }
+    } catch {
+      toast.error('Ошибка сети, попробуй снова');
+    } finally {
+      setRedeeming(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-20">
+        <Icon name="Loader" size={24} className="animate-spin text-gold" />
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  const progressPct = data.next_level_min
+    ? Math.min(100, Math.round((data.points_lifetime / data.next_level_min) * 100))
+    : 100;
+
+  return (
+    <div className="space-y-5 animate-float-up">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold shrink-0">
+          <Icon name="ArrowLeft" size={20} />
+        </button>
+        <div>
+          <h2 className="font-display text-xl font-bold">Программа лояльности</h2>
+          <p className="text-xs text-muted-foreground">Очки за каждую ставку</p>
+        </div>
+      </div>
+
+      {/* Карточка уровня */}
+      <div className="glass rounded-2xl p-5 relative overflow-hidden">
+        <div className="absolute inset-0 shimmer-line opacity-20 pointer-events-none" />
+        <div className="relative">
+          <div className="flex items-center justify-between mb-3">
+            <span className="inline-flex items-center gap-1.5 text-sm font-bold px-3 py-1 rounded-full bg-gold/15 text-gold">
+              {data.level_emoji} {data.level_label}
+            </span>
+            <span className="text-xs text-muted-foreground">×{data.multiplier} очков</span>
+          </div>
+          <div className="font-display text-4xl font-bold gold-text tabular-nums">{data.points.toLocaleString('ru')}</div>
+          <p className="text-xs text-muted-foreground mt-1">доступно очков</p>
+
+          {data.next_level_label && data.next_level_min && (
+            <>
+              <div className="flex items-center justify-between text-xs text-muted-foreground mt-4 mb-1.5">
+                <span>До {data.next_level_emoji} {data.next_level_label}</span>
+                <span className="font-semibold">{data.points_lifetime.toLocaleString('ru')} / {data.next_level_min.toLocaleString('ru')}</span>
+              </div>
+              <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden">
+                <div className="h-full gold-gradient rounded-full transition-all" style={{ width: `${progressPct}%` }} />
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Как начисляются очки */}
+      <div className="glass rounded-xl p-4 flex items-center gap-3">
+        <Icon name="Info" size={16} className="text-gold shrink-0" />
+        <p className="text-xs text-muted-foreground">
+          За каждую ставку начисляется <span className="text-foreground font-semibold">{data.points_per_rub} очко за 1 ₽</span>, умноженное на множитель твоего уровня
+        </p>
+      </div>
+
+      {/* Обмен очков */}
+      <div className="glass rounded-2xl p-4 space-y-3">
+        <p className="text-xs text-muted-foreground uppercase tracking-wider">Обменять очки на баланс</p>
+        <div>
+          <input
+            className="w-full bg-background/60 border border-gold/20 rounded-xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-foreground font-display text-lg"
+            placeholder={`Минимум ${data.min_redeem} очков`}
+            value={redeemAmount}
+            onChange={e => setRedeemAmount(e.target.value.replace(/\D/g, ''))}
+            inputMode="numeric"
+          />
+        </div>
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">Курс обмена</span>
+          <span className="font-medium">1 очко = {data.redeem_rate} ₽</span>
+        </div>
+        {parsedPoints > 0 && (
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Получишь</span>
+            <span className="font-bold text-emerald-400">{redeemValue.toLocaleString('ru')} ₽</span>
+          </div>
+        )}
+        {parsedPoints > 0 && parsedPoints < data.min_redeem && (
+          <div className="flex items-center gap-2 text-xs text-red-400">
+            <Icon name="AlertCircle" size={14} /> Минимум для обмена — {data.min_redeem} очков
+          </div>
+        )}
+        {parsedPoints > data.points && (
+          <div className="flex items-center gap-2 text-xs text-red-400">
+            <Icon name="AlertCircle" size={14} /> Недостаточно очков
+          </div>
+        )}
+        <Button onClick={handleRedeem} disabled={!canRedeem || redeeming}
+          className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
+          {redeeming ? <Icon name="Loader" size={20} className="animate-spin" /> : 'Обменять'}
+        </Button>
+      </div>
+
+      {/* Уровни лояльности */}
+      <div className="space-y-3">
+        <p className="text-xs text-muted-foreground uppercase tracking-wider">Уровни программы</p>
+        <div className="space-y-2">
+          {data.all_levels.map(lv => (
+            <div key={lv.name}
+              className={`glass rounded-xl p-3 flex items-center gap-3 ${lv.name === data.level ? 'border border-gold/40' : ''}`}
+            >
+              <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0"
+                style={{ background: `${lv.color}18`, border: `1px solid ${lv.color}44` }}>
+                {lv.emoji}
+              </div>
+              <div className="flex-1">
+                <div className="text-sm font-semibold">{lv.label}</div>
+                <div className="text-xs text-muted-foreground">от {lv.min_points.toLocaleString('ru')} очков</div>
+              </div>
+              <span className="text-xs font-bold text-gold">×{lv.multiplier}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* История обменов */}
+      {data.history.length > 0 && (
+        <div className="space-y-3">
+          <p className="text-xs text-muted-foreground uppercase tracking-wider">История обменов</p>
+          <div className="space-y-2">
+            {data.history.map((h, i) => (
+              <div key={i} className="glass rounded-xl p-3 flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">{h.points.toLocaleString('ru')} очков</span>
+                <span className="font-semibold text-emerald-400">+{h.amount.toLocaleString('ru')} ₽</span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

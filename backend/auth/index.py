@@ -54,6 +54,34 @@ PHONE_CODE_MAX_ATTEMPTS   = 5    # макс. попыток ввода кода
 PHONE_RESEND_COOLDOWN_SEC = 60   # антиспам на повторную отправку
 PHONE_VERIFY_WITHDRAW_THRESHOLD = 25_000  # сумма вывода, с которой требуется телефон (₽)
 
+# ── Программа лояльности ─────────────────────────────────────────────────────
+LOYALTY_POINTS_PER_RUB   = 0.1    # очков за 1 ₽ ставки (без учёта множителя уровня)
+LOYALTY_REDEEM_RATE      = 0.5    # ₽ за 1 очко при обмене
+LOYALTY_MIN_REDEEM       = 100    # минимум очков для обмена за раз
+
+LOYALTY_LEVELS = [
+    {'name': 'starter',   'label': 'Новичок',    'min_points': 0,     'multiplier': 1.0, 'color': '#9ca3af', 'emoji': '🔹'},
+    {'name': 'bronze',    'label': 'Бронза',     'min_points': 500,   'multiplier': 1.2, 'color': '#cd7f32', 'emoji': '🥉'},
+    {'name': 'silver',    'label': 'Серебро',    'min_points': 2500,  'multiplier': 1.5, 'color': '#c0c0c0', 'emoji': '🥈'},
+    {'name': 'gold',      'label': 'Золото',     'min_points': 10000, 'multiplier': 2.0, 'color': '#f5c842', 'emoji': '🥇'},
+    {'name': 'diamond',   'label': 'Бриллиант',  'min_points': 50000, 'multiplier': 3.0, 'color': '#60d4f5', 'emoji': '💠'},
+]
+
+
+def calc_loyalty_level(lifetime_points: int) -> dict:
+    level = LOYALTY_LEVELS[0]
+    for lv in LOYALTY_LEVELS:
+        if lifetime_points >= lv['min_points']:
+            level = lv
+    return level
+
+
+def next_loyalty_level(lifetime_points: int) -> dict | None:
+    for lv in LOYALTY_LEVELS:
+        if lifetime_points < lv['min_points']:
+            return lv
+    return None
+
 # ── Достижения и бейджи ──────────────────────────────────────────────────────
 # Каждое достижение: id, name, description, icon (эмодзи), reward (₽), category
 ACHIEVEMENTS = [
@@ -296,7 +324,8 @@ def get_user_by_token(cur, token: str):
     cur.execute("""
         SELECT u.id, u.email, u.username, u.balance, u.referral_code,
                u.vip_level, u.total_deposited, u.cashback_available, u.avatar_url,
-               u.first_deposit_bonus_claimed, u.email_verified, u.phone, u.phone_verified
+               u.first_deposit_bonus_claimed, u.email_verified, u.phone, u.phone_verified,
+               u.loyalty_points, u.loyalty_points_lifetime
         FROM sessions s JOIN users u ON s.user_id = u.id
         WHERE s.token = %s AND s.expires_at > NOW()
     """, (token,))
@@ -306,6 +335,9 @@ def get_user_by_token(cur, token: str):
 def user_to_dict(u) -> dict:
     vip = calc_vip(float(u[6]))
     nxt = next_vip(float(u[6]))
+    loyalty_lifetime = int(u[14]) if len(u) > 14 else 0
+    loyalty_level = calc_loyalty_level(loyalty_lifetime)
+    loyalty_next = next_loyalty_level(loyalty_lifetime)
     return {
         'id': u[0], 'email': u[1], 'username': u[2], 'balance': float(u[3]),
         'referral_code': u[4],
@@ -324,6 +356,16 @@ def user_to_dict(u) -> dict:
         'email_verified': bool(u[10]) if len(u) > 10 else False,
         'phone': u[11] if len(u) > 11 else None,
         'phone_verified': bool(u[12]) if len(u) > 12 else False,
+        'loyalty_points': int(u[13]) if len(u) > 13 else 0,
+        'loyalty_points_lifetime': loyalty_lifetime,
+        'loyalty_level': loyalty_level['name'],
+        'loyalty_label': loyalty_level['label'],
+        'loyalty_emoji': loyalty_level['emoji'],
+        'loyalty_multiplier': loyalty_level['multiplier'],
+        'loyalty_next_level': loyalty_next['name'] if loyalty_next else None,
+        'loyalty_next_label': loyalty_next['label'] if loyalty_next else None,
+        'loyalty_next_min': loyalty_next['min_points'] if loyalty_next else None,
+        'loyalty_next_emoji': loyalty_next['emoji'] if loyalty_next else None,
     }
 
 
@@ -340,6 +382,8 @@ def handler(event: dict, context) -> dict:
     POST ?action=send-phone-code    { phone } + X-Auth-Token — отправить SMS-код
     POST ?action=verify-phone       { code } + X-Auth-Token — подтвердить телефон
     GET  ?action=achievements       X-Auth-Token — список достижений с прогрессом
+    GET  ?action=loyalty            X-Auth-Token — статус программы лояльности
+    POST ?action=redeem-loyalty     { points } + X-Auth-Token — обменять очки на баланс
     GET  ?action=order-status&session_id=...
     """
     if event.get('httpMethod') == 'OPTIONS':
@@ -850,6 +894,13 @@ def handler(event: dict, context) -> dict:
         if delta < 0 and vip['cashback_pct'] > 0:
             cashback_earned = round(abs(delta) * vip['cashback_pct'] / 100, 2)
 
+        # Очки лояльности начисляются за каждую ставку (в обе стороны — выигрыш и проигрыш
+        # засчитываются только один раз, за списание ставки, т.е. delta < 0)
+        loyalty_earned = 0
+        if not is_deposit and delta < 0:
+            loyalty_level = calc_loyalty_level(int(user[14]) if len(user) > 14 else 0)
+            loyalty_earned = round(abs(delta) * LOYALTY_POINTS_PER_RUB * loyalty_level['multiplier'])
+
         # Проверяем бонус первого депозита
         first_deposit_bonus = 0.0
         if is_deposit and delta > 0:
@@ -876,6 +927,25 @@ def handler(event: dict, context) -> dict:
                     updated_at = NOW()
                 WHERE id = %s RETURNING balance, total_deposited, vip_level
             """, (total_credit, delta, first_deposit_bonus, delta, delta, delta, delta, user[0]))
+        elif loyalty_earned > 0 and cashback_earned > 0:
+            cur.execute("""
+                UPDATE users
+                SET balance = GREATEST(0, balance + %s),
+                    cashback_available = cashback_available + %s,
+                    loyalty_points = loyalty_points + %s,
+                    loyalty_points_lifetime = loyalty_points_lifetime + %s,
+                    updated_at = NOW()
+                WHERE id = %s RETURNING balance, total_deposited, vip_level
+            """, (delta, cashback_earned, loyalty_earned, loyalty_earned, user[0]))
+        elif loyalty_earned > 0:
+            cur.execute("""
+                UPDATE users
+                SET balance = GREATEST(0, balance + %s),
+                    loyalty_points = loyalty_points + %s,
+                    loyalty_points_lifetime = loyalty_points_lifetime + %s,
+                    updated_at = NOW()
+                WHERE id = %s RETURNING balance, total_deposited, vip_level
+            """, (delta, loyalty_earned, loyalty_earned, user[0]))
         elif cashback_earned > 0:
             cur.execute("""
                 UPDATE users
@@ -907,6 +977,7 @@ def handler(event: dict, context) -> dict:
                     'cashback_earned': cashback_earned,
                     'first_deposit_bonus': first_deposit_bonus,
                     'new_achievements': new_achievements,
+                    'loyalty_earned': loyalty_earned,
                 }), 'isBase64Encoded': False}
 
     # ── LOGOUT ──
@@ -1406,6 +1477,97 @@ def handler(event: dict, context) -> dict:
             'success': True,
             'cashback': cashback,
             'new_balance': new_balance,
+        }), 'isBase64Encoded': False}
+
+    # ── LOYALTY: статус программы лояльности ──
+    if action == 'loyalty' and http_method == 'GET':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        points = int(user[13]) if len(user) > 13 else 0
+        lifetime = int(user[14]) if len(user) > 14 else 0
+        level = calc_loyalty_level(lifetime)
+        nxt = next_loyalty_level(lifetime)
+
+        cur.execute("""
+            SELECT points, amount, created_at FROM loyalty_redemptions
+            WHERE user_id = %s ORDER BY created_at DESC LIMIT 20
+        """, (user[0],))
+        history = [{'points': r[0], 'amount': float(r[1]), 'created_at': r[2].isoformat()} for r in cur.fetchall()]
+        cur.close(); conn.close()
+
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'points': points,
+            'points_lifetime': lifetime,
+            'level': level['name'], 'level_label': level['label'],
+            'level_emoji': level['emoji'], 'multiplier': level['multiplier'],
+            'next_level': nxt['name'] if nxt else None,
+            'next_level_label': nxt['label'] if nxt else None,
+            'next_level_min': nxt['min_points'] if nxt else None,
+            'next_level_emoji': nxt['emoji'] if nxt else None,
+            'points_per_rub': LOYALTY_POINTS_PER_RUB,
+            'redeem_rate': LOYALTY_REDEEM_RATE,
+            'min_redeem': LOYALTY_MIN_REDEEM,
+            'all_levels': LOYALTY_LEVELS,
+            'history': history,
+        }), 'isBase64Encoded': False}
+
+    # ── LOYALTY: обмен очков на баланс ──
+    if action == 'redeem-loyalty' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        try:
+            points_to_redeem = int(body.get('points', 0))
+        except (TypeError, ValueError):
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Некорректное количество очков'}), 'isBase64Encoded': False}
+
+        available = int(user[13]) if len(user) > 13 else 0
+
+        if points_to_redeem < LOYALTY_MIN_REDEEM:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': f'Минимум для обмена — {LOYALTY_MIN_REDEEM} очков'}),
+                    'isBase64Encoded': False}
+        if points_to_redeem > available:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Недостаточно очков лояльности'}), 'isBase64Encoded': False}
+
+        amount = round(points_to_redeem * LOYALTY_REDEEM_RATE, 2)
+
+        cur.execute("""
+            UPDATE users SET balance = balance + %s, loyalty_points = loyalty_points - %s, updated_at = NOW()
+            WHERE id = %s RETURNING balance, loyalty_points
+        """, (amount, points_to_redeem, user[0]))
+        new_balance, remaining_points = cur.fetchone()
+
+        cur.execute("""
+            INSERT INTO loyalty_redemptions (user_id, points, amount) VALUES (%s, %s, %s)
+        """, (user[0], points_to_redeem, amount))
+
+        conn.commit(); cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'success': True,
+            'amount': amount,
+            'balance': float(new_balance),
+            'remaining_points': int(remaining_points),
         }), 'isBase64Encoded': False}
 
     # ── VIP STATUS ──
