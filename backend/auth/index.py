@@ -38,6 +38,24 @@ EMAIL_CODE_TTL_MIN   = 15   # время жизни кода (минут)
 EMAIL_CODE_MAX_ATTEMPTS = 5  # макс. попыток ввода кода
 EMAIL_RESEND_COOLDOWN_SEC = 60  # антиспам на повторную отправку
 
+# ── Защита от подбора пароля (brute-force) ──────────────────────────────────
+LOGIN_MAX_ATTEMPTS_ACCOUNT = 5    # неудачных попыток на аккаунт до блокировки
+LOGIN_LOCKOUT_MIN_ACCOUNT  = 15   # на сколько минут блокируется аккаунт
+LOGIN_MAX_ATTEMPTS_IP      = 20   # неудачных попыток с одного IP за окно
+LOGIN_IP_WINDOW_MIN        = 15   # окно наблюдения по IP (минут)
+LOGIN_LOCKOUT_MIN_IP       = 30   # на сколько минут блокируется IP
+
+
+def get_client_ip(event: dict) -> str:
+    headers = event.get('headers') or {}
+    # Пробуем стандартные заголовки прокси, затем requestContext
+    ip = headers.get('X-Forwarded-For') or headers.get('x-forwarded-for', '')
+    if ip:
+        return ip.split(',')[0].strip()
+    ctx = event.get('requestContext') or {}
+    identity = ctx.get('identity') or {}
+    return identity.get('sourceIp', 'unknown')
+
 
 def send_email(to: str, subject: str, html: str):
     """Отправка email через Gmail SMTP"""
@@ -256,23 +274,90 @@ def handler(event: dict, context) -> dict:
     if action == 'login' and http_method == 'POST':
         email = str(body.get('email', '')).lower().strip()
         password = str(body.get('password', ''))
+        client_ip = get_client_ip(event)
 
+        # ── Проверка блокировки по IP (защита от перебора по разным аккаунтам) ──
+        cur.execute("""
+            SELECT window_start, attempt_count, locked_until,
+                   EXTRACT(EPOCH FROM (NOW() - window_start))
+            FROM login_rate_limits WHERE ip_address = %s
+        """, (client_ip,))
+        ip_row = cur.fetchone()
+        if ip_row:
+            _, ip_attempts, ip_locked_until, ip_window_age = ip_row
+            if ip_locked_until:
+                cur.execute("SELECT %s::timestamp > NOW()", (ip_locked_until,))
+                if cur.fetchone()[0]:
+                    cur.close(); conn.close()
+                    return {'statusCode': 429, 'headers': HEADERS,
+                            'body': json.dumps({'error': 'Слишком много попыток входа. Попробуй позже.'}),
+                            'isBase64Encoded': False}
+            # Если окно истекло — сбрасываем счётчик
+            if ip_window_age is not None and ip_window_age > LOGIN_IP_WINDOW_MIN * 60:
+                cur.execute("""
+                    UPDATE login_rate_limits SET window_start = NOW(), attempt_count = 0, locked_until = NULL
+                    WHERE ip_address = %s
+                """, (client_ip,))
+
+        # ── Ищем пользователя и проверяем блокировку аккаунта ──
         cur.execute("""
             SELECT id, email, username, balance, referral_code,
                    vip_level, total_deposited, cashback_available,
-                   avatar_url, first_deposit_bonus_claimed, email_verified
-            FROM users WHERE email = %s AND password_hash = %s AND is_active = TRUE
-        """, (email, hash_password(password)))
-        user = cur.fetchone()
-        if not user:
-            cur.close(); conn.close()
+                   avatar_url, first_deposit_bonus_claimed, email_verified,
+                   password_hash, failed_login_attempts, login_locked_until
+            FROM users WHERE email = %s AND is_active = TRUE
+        """, (email,))
+        row = cur.fetchone()
+
+        if row and row[13]:
+            cur.execute("SELECT %s::timestamp > NOW()", (row[13],))
+            if cur.fetchone()[0]:
+                cur.close(); conn.close()
+                return {'statusCode': 429, 'headers': HEADERS,
+                        'body': json.dumps({'error': 'Аккаунт временно заблокирован из-за неудачных попыток входа. Попробуй позже.'}),
+                        'isBase64Encoded': False}
+
+        password_ok = bool(row) and row[11] == hash_password(password)
+
+        if not password_ok:
+            # Увеличиваем счётчик неудач по IP (upsert)
+            cur.execute("""
+                INSERT INTO login_rate_limits (ip_address, window_start, attempt_count)
+                VALUES (%s, NOW(), 1)
+                ON CONFLICT (ip_address) DO UPDATE
+                SET attempt_count = login_rate_limits.attempt_count + 1,
+                    locked_until = CASE
+                        WHEN login_rate_limits.attempt_count + 1 >= %s THEN NOW() + make_interval(mins => %s)
+                        ELSE login_rate_limits.locked_until
+                    END
+            """, (client_ip, LOGIN_MAX_ATTEMPTS_IP, LOGIN_LOCKOUT_MIN_IP))
+
+            # Увеличиваем счётчик неудач по аккаунту (если email существует)
+            if row:
+                cur.execute("""
+                    UPDATE users SET
+                        failed_login_attempts = failed_login_attempts + 1,
+                        login_locked_until = CASE
+                            WHEN failed_login_attempts + 1 >= %s THEN NOW() + make_interval(mins => %s)
+                            ELSE login_locked_until
+                        END
+                    WHERE id = %s
+                """, (LOGIN_MAX_ATTEMPTS_ACCOUNT, LOGIN_LOCKOUT_MIN_ACCOUNT, row[0]))
+
+            conn.commit(); cur.close(); conn.close()
             return {'statusCode': 401, 'headers': HEADERS,
                     'body': json.dumps({'error': 'Неверный email или пароль'}), 'isBase64Encoded': False}
 
+        # Успешный вход — сбрасываем счётчик неудач по аккаунту
+        cur.execute("""
+            UPDATE users SET failed_login_attempts = 0, login_locked_until = NULL WHERE id = %s
+        """, (row[0],))
+
         session_token = secrets.token_hex(32)
-        cur.execute("INSERT INTO sessions (user_id, token) VALUES (%s, %s)", (user[0], session_token))
+        cur.execute("INSERT INTO sessions (user_id, token) VALUES (%s, %s)", (row[0], session_token))
         conn.commit(); cur.close(); conn.close()
 
+        user = row[:11]  # обрезаем служебные поля (password_hash, attempts, locked_until)
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
             'token': session_token,
             'user': user_to_dict(user)
