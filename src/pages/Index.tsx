@@ -191,31 +191,46 @@ export default function Index() {
     }).catch(() => {});
   }, []);
 
-  // Синхронизируем баланс с БД при изменении
+  // Синхронизируем баланс с БД при изменении.
+  // Баланс обновляется оптимистично, но при отказе сервера (лимит ставки,
+  // недостаточно средств, rate-limit) — откатывается на реальное значение из БД.
   const syncBalance = useCallback(async (delta: number, isDeposit = false) => {
     setBalance(b => b + delta);
     const token = localStorage.getItem(AUTH_TOKEN_KEY);
     if (!token) return;
-    const res = await fetch(`${AUTH_API}?action=balance`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
-      body: JSON.stringify({ delta, is_deposit: isDeposit }),
-    });
-    if (res.ok) {
+    try {
+      const res = await fetch(`${AUTH_API}?action=balance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+        body: JSON.stringify({ delta, is_deposit: isDeposit }),
+      });
       const data = await res.json();
-      setBalance(data.balance);
-      if (isDeposit) {
-        // Показываем тост с бонусом первого депозита
-        if (data.first_deposit_bonus > 0) {
-          toast.success(`🎉 Бонус первого депозита: +${data.first_deposit_bonus.toLocaleString('ru')} ₽`, {
-            description: 'Бонус 100% зачислен на баланс!',
-            duration: 6000,
-          });
+      if (res.ok) {
+        setBalance(data.balance);
+        if (isDeposit) {
+          // Показываем тост с бонусом первого депозита
+          if (data.first_deposit_bonus > 0) {
+            toast.success(`🎉 Бонус первого депозита: +${data.first_deposit_bonus.toLocaleString('ru')} ₽`, {
+              description: 'Бонус 100% зачислен на баланс!',
+              duration: 6000,
+            });
+          }
+          // Обновляем данные пользователя (VIP-уровень и флаг бонуса)
+          fetch(`${AUTH_API}?action=me`, { headers: { 'X-Auth-Token': token } })
+            .then(r => r.json()).then(d => { if (d.user) setUser(d.user); }).catch(() => {});
         }
-        // Обновляем данные пользователя (VIP-уровень и флаг бонуса)
+      } else {
+        // Сервер отклонил операцию — откатываем оптимистичное изменение
+        // и подтягиваем реальный баланс из БД
+        setBalance(b => b - delta);
+        toast.error(data.error || 'Операция отклонена сервером');
         fetch(`${AUTH_API}?action=me`, { headers: { 'X-Auth-Token': token } })
-          .then(r => r.json()).then(d => { if (d.user) setUser(d.user); }).catch(() => {});
+          .then(r => r.json()).then(d => { if (d.user) setBalance(d.user.balance); }).catch(() => {});
       }
+    } catch {
+      // Сетевая ошибка — тоже откатываем, чтобы не показывать фейковый баланс
+      setBalance(b => b - delta);
+      toast.error('Ошибка сети, баланс не обновлён');
     }
   }, []);
 

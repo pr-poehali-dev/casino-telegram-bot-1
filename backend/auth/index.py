@@ -23,6 +23,13 @@ VIP_LEVELS = [
     {'name': 'platinum', 'label': 'Platinum',    'min': 500000,  'cashback_pct': 12,   'color': '#e5e4e2', 'emoji': '💎'},
 ]
 
+# ── Лимиты ставок и защита от злоупотреблений ──────────────────────────────
+MIN_BET             = 1        # минимальная ставка (₽)
+MAX_BET              = 20_000  # максимальная ставка за одну игру (₽)
+MAX_WIN_MULTIPLIER   = 200     # максимально допустимый множитель выигрыша (защита от подделки result)
+BET_RATE_WINDOW_SEC  = 10      # окно анти-спама
+BET_RATE_MAX_COUNT   = 15      # макс. ставок за окно
+
 
 def calc_vip(total_deposited: float) -> dict:
     level = VIP_LEVELS[0]
@@ -242,8 +249,59 @@ def handler(event: dict, context) -> dict:
             return {'statusCode': 401, 'headers': HEADERS,
                     'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
 
-        delta = float(body.get('delta', 0))
+        try:
+            delta = float(body.get('delta', 0))
+        except (TypeError, ValueError):
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Некорректная сумма'}), 'isBase64Encoded': False}
         is_deposit = bool(body.get('is_deposit', False))
+        current_balance = float(user[3])
+
+        # ── Защита от накрутки: депозиты не лимитируем (уже подтверждены оплатой),
+        # игровые операции (ставки/выигрыши) проверяем жёстко ──
+        if not is_deposit:
+            # Anti-spam: не более BET_RATE_MAX_COUNT операций за BET_RATE_WINDOW_SEC секунд
+            cur.execute("""
+                SELECT bet_window_start, bet_window_count, EXTRACT(EPOCH FROM (NOW() - bet_window_start))
+                FROM users WHERE id = %s
+            """, (user[0],))
+            bw_start, bw_count, bw_age = cur.fetchone()
+            if bw_start is None or bw_age is None or bw_age > BET_RATE_WINDOW_SEC:
+                cur.execute("""
+                    UPDATE users SET bet_window_start = NOW(), bet_window_count = 1 WHERE id = %s
+                """, (user[0],))
+            else:
+                if bw_count + 1 > BET_RATE_MAX_COUNT:
+                    conn.commit(); cur.close(); conn.close()
+                    return {'statusCode': 429, 'headers': HEADERS,
+                            'body': json.dumps({'error': 'Слишком много ставок подряд. Подожди немного.'}),
+                            'isBase64Encoded': False}
+                cur.execute("UPDATE users SET bet_window_count = bet_window_count + 1 WHERE id = %s", (user[0],))
+
+            if delta < 0:
+                # Списание ставки — сумма должна быть в разумных пределах и не превышать баланс
+                stake = abs(delta)
+                if stake < MIN_BET:
+                    cur.close(); conn.close()
+                    return {'statusCode': 400, 'headers': HEADERS,
+                            'body': json.dumps({'error': f'Минимальная ставка — {MIN_BET} ₽'}), 'isBase64Encoded': False}
+                if stake > MAX_BET:
+                    cur.close(); conn.close()
+                    return {'statusCode': 400, 'headers': HEADERS,
+                            'body': json.dumps({'error': f'Максимальная ставка — {MAX_BET:,} ₽'.replace(',', ' ')}),
+                            'isBase64Encoded': False}
+                if stake > current_balance:
+                    cur.close(); conn.close()
+                    return {'statusCode': 400, 'headers': HEADERS,
+                            'body': json.dumps({'error': 'Недостаточно средств на балансе'}), 'isBase64Encoded': False}
+            elif delta > 0:
+                # Начисление выигрыша — не должно превышать разумный максимум
+                max_possible_win = MAX_BET * MAX_WIN_MULTIPLIER
+                if delta > max_possible_win:
+                    cur.close(); conn.close()
+                    return {'statusCode': 400, 'headers': HEADERS,
+                            'body': json.dumps({'error': 'Некорректная сумма выигрыша'}), 'isBase64Encoded': False}
 
         # При проигрыше (delta < 0) начисляем кешбэк согласно VIP-уровню
         vip = calc_vip(float(user[6]))
