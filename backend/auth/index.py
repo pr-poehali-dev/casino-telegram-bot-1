@@ -54,6 +54,139 @@ PHONE_CODE_MAX_ATTEMPTS   = 5    # макс. попыток ввода кода
 PHONE_RESEND_COOLDOWN_SEC = 60   # антиспам на повторную отправку
 PHONE_VERIFY_WITHDRAW_THRESHOLD = 25_000  # сумма вывода, с которой требуется телефон (₽)
 
+# ── Достижения и бейджи ──────────────────────────────────────────────────────
+# Каждое достижение: id, name, description, icon (эмодзи), reward (₽), category
+ACHIEVEMENTS = [
+    # Игровая активность
+    {'id': 'first_game',      'name': 'Первая ставка',     'desc': 'Сыграй свою первую игру',              'icon': '🎮', 'reward': 20,  'category': 'games'},
+    {'id': 'games_10',        'name': 'Разогрев',          'desc': 'Сыграй 10 игр',                        'icon': '🔥', 'reward': 30,  'category': 'games'},
+    {'id': 'games_50',        'name': 'Завсегдатай',       'desc': 'Сыграй 50 игр',                        'icon': '🎯', 'reward': 75,  'category': 'games'},
+    {'id': 'games_200',       'name': 'Ветеран казино',    'desc': 'Сыграй 200 игр',                       'icon': '🏆', 'reward': 200, 'category': 'games'},
+    {'id': 'games_1000',      'name': 'Легенда',           'desc': 'Сыграй 1000 игр',                      'icon': '👑', 'reward': 1000,'category': 'games'},
+    {'id': 'all_games',       'name': 'Исследователь',     'desc': 'Попробуй все 13 игр казино',           'icon': '🗺️', 'reward': 150, 'category': 'games'},
+    # Победы
+    {'id': 'first_win',       'name': 'Первая победа',     'desc': 'Выиграй свою первую игру',             'icon': '✅', 'reward': 25,  'category': 'wins'},
+    {'id': 'wins_25',         'name': 'Везунчик',          'desc': 'Выиграй 25 раз',                       'icon': '🍀', 'reward': 60,  'category': 'wins'},
+    {'id': 'wins_100',        'name': 'Мастер удачи',      'desc': 'Выиграй 100 раз',                      'icon': '🌟', 'reward': 250, 'category': 'wins'},
+    {'id': 'win_streak_5',    'name': 'Полоса везения',    'desc': '5 побед подряд',                       'icon': '⚡', 'reward': 100, 'category': 'wins'},
+    # Крупные выигрыши
+    {'id': 'big_win_500',     'name': 'Крупный улов',      'desc': 'Выиграй 500 ₽ за одну игру',           'icon': '💰', 'reward': 50,  'category': 'bigwin'},
+    {'id': 'big_win_2000',    'name': 'Джекпот',           'desc': 'Выиграй 2000 ₽ за одну игру',          'icon': '💎', 'reward': 150, 'category': 'bigwin'},
+    {'id': 'big_win_10000',   'name': 'Королевский куш',   'desc': 'Выиграй 10 000 ₽ за одну игру',        'icon': '👑', 'reward': 500, 'category': 'bigwin'},
+    # Депозиты
+    {'id': 'first_deposit',   'name': 'Старт положен',     'desc': 'Сделай первый депозит',                'icon': '💳', 'reward': 30,  'category': 'deposit'},
+    {'id': 'deposit_5000',    'name': 'Инвестор',          'desc': 'Пополни баланс суммарно на 5000 ₽',    'icon': '📈', 'reward': 100, 'category': 'deposit'},
+    {'id': 'deposit_25000',   'name': 'Капиталист',        'desc': 'Пополни баланс суммарно на 25 000 ₽',  'icon': '🏦', 'reward': 300, 'category': 'deposit'},
+    # Ежедневная активность
+    {'id': 'daily_streak_3',  'name': 'Три дня подряд',    'desc': 'Забирай бонус 3 дня подряд',           'icon': '📅', 'reward': 40,  'category': 'daily'},
+    {'id': 'daily_streak_7',  'name': 'Неделя с нами',     'desc': 'Забирай бонус 7 дней подряд',          'icon': '🗓️', 'reward': 120, 'category': 'daily'},
+    {'id': 'daily_streak_30', 'name': 'Верный игрок',      'desc': 'Забирай бонус 30 дней подряд',         'icon': '🏅', 'reward': 500, 'category': 'daily'},
+    # Рефералы
+    {'id': 'first_referral',  'name': 'Пригласил друга',   'desc': 'Пригласи первого друга',               'icon': '🤝', 'reward': 50,  'category': 'referral'},
+    {'id': 'referral_5',      'name': 'Амбассадор',        'desc': 'Пригласи 5 друзей',                    'icon': '📣', 'reward': 200, 'category': 'referral'},
+    # VIP
+    {'id': 'vip_bronze',      'name': 'Бронзовый статус',  'desc': 'Достигни VIP-уровня Bronze',           'icon': '🥉', 'reward': 50,  'category': 'vip'},
+    {'id': 'vip_gold',        'name': 'Золотой статус',    'desc': 'Достигни VIP-уровня Gold',             'icon': '🥇', 'reward': 300, 'category': 'vip'},
+]
+
+ALL_GAME_NAMES = {'Слоты', 'Монета', 'Кости', 'Рулетка', 'Блэкджек', 'Мины', 'Краш',
+                   'Колесо', 'Видеопокер', 'Быки/Медведи', 'Hi-Lo', 'Бинго', 'Кено'}
+
+
+def check_and_unlock_achievements(cur, user_id: int) -> list:
+    """
+    Пересчитывает статистику пользователя и открывает новые достижения.
+    Возвращает список только что открытых достижений (с начисленной наградой).
+    """
+    cur.execute("SELECT achievement_id FROM user_achievements WHERE user_id = %s", (user_id,))
+    unlocked = {row[0] for row in cur.fetchall()}
+
+    to_unlock = []
+
+    # Статистика по играм
+    cur.execute("""
+        SELECT COUNT(*), COUNT(*) FILTER (WHERE is_win),
+               COALESCE(MAX(result) FILTER (WHERE is_win), 0),
+               COUNT(DISTINCT game)
+        FROM game_history WHERE user_id = %s
+    """, (user_id,))
+    total_games, total_wins, max_win, distinct_games = cur.fetchone()
+    total_games = total_games or 0
+    total_wins = total_wins or 0
+    max_win = float(max_win or 0)
+    distinct_games = distinct_games or 0
+
+    # Текущая полоса побед подряд (последние записи)
+    cur.execute("""
+        SELECT is_win FROM game_history WHERE user_id = %s
+        ORDER BY created_at DESC LIMIT 20
+    """, (user_id,))
+    streak = 0
+    for (win,) in cur.fetchall():
+        if win:
+            streak += 1
+        else:
+            break
+
+    # Пользователь: депозиты, VIP, дневная серия
+    cur.execute("""
+        SELECT total_deposited, vip_level, daily_streak FROM users WHERE id = %s
+    """, (user_id,))
+    total_deposited, vip_level, daily_streak = cur.fetchone()
+    total_deposited = float(total_deposited or 0)
+    daily_streak = daily_streak or 0
+
+    # Рефералы
+    cur.execute("SELECT COUNT(DISTINCT referee_id) FROM referral_bonuses WHERE referrer_id = %s", (user_id,))
+    total_referrals = cur.fetchone()[0] or 0
+
+    checks = {
+        'first_game':      total_games >= 1,
+        'games_10':        total_games >= 10,
+        'games_50':        total_games >= 50,
+        'games_200':       total_games >= 200,
+        'games_1000':      total_games >= 1000,
+        'all_games':       distinct_games >= len(ALL_GAME_NAMES),
+        'first_win':       total_wins >= 1,
+        'wins_25':         total_wins >= 25,
+        'wins_100':        total_wins >= 100,
+        'win_streak_5':    streak >= 5,
+        'big_win_500':     max_win >= 500,
+        'big_win_2000':    max_win >= 2000,
+        'big_win_10000':   max_win >= 10000,
+        'first_deposit':   total_deposited > 0,
+        'deposit_5000':    total_deposited >= 5000,
+        'deposit_25000':   total_deposited >= 25000,
+        'daily_streak_3':  daily_streak >= 3,
+        'daily_streak_7':  daily_streak >= 7,
+        'daily_streak_30': daily_streak >= 30,
+        'first_referral':  total_referrals >= 1,
+        'referral_5':      total_referrals >= 5,
+        'vip_bronze':      vip_level in ('bronze', 'silver', 'gold', 'platinum'),
+        'vip_gold':        vip_level in ('gold', 'platinum'),
+    }
+
+    for ach in ACHIEVEMENTS:
+        aid = ach['id']
+        if aid in unlocked:
+            continue
+        if checks.get(aid):
+            cur.execute("""
+                INSERT INTO user_achievements (user_id, achievement_id)
+                VALUES (%s, %s) ON CONFLICT (user_id, achievement_id) DO NOTHING
+            """, (user_id, aid))
+            if ach['reward'] > 0:
+                cur.execute("""
+                    UPDATE users SET balance = balance + %s, updated_at = NOW() WHERE id = %s
+                """, (ach['reward'], user_id))
+                cur.execute("""
+                    UPDATE user_achievements SET reward_claimed = TRUE
+                    WHERE user_id = %s AND achievement_id = %s
+                """, (user_id, aid))
+            to_unlock.append(ach)
+
+    return to_unlock
+
 
 def normalize_phone(raw: str) -> str:
     """Приводим телефон к формату 7XXXXXXXXXX (для SMS.ru)"""
@@ -206,6 +339,7 @@ def handler(event: dict, context) -> dict:
     POST ?action=verify-email       { code } + X-Auth-Token — подтвердить код
     POST ?action=send-phone-code    { phone } + X-Auth-Token — отправить SMS-код
     POST ?action=verify-phone       { code } + X-Auth-Token — подтвердить телефон
+    GET  ?action=achievements       X-Auth-Token — список достижений с прогрессом
     GET  ?action=order-status&session_id=...
     """
     if event.get('httpMethod') == 'OPTIONS':
@@ -758,12 +892,21 @@ def handler(event: dict, context) -> dict:
 
         row = cur.fetchone()
         new_balance = float(row[0])
+
+        new_achievements = []
+        if is_deposit and delta > 0:
+            new_achievements = check_and_unlock_achievements(cur, user[0])
+            if new_achievements:
+                cur.execute("SELECT balance FROM users WHERE id = %s", (user[0],))
+                new_balance = float(cur.fetchone()[0])
+
         conn.commit(); cur.close(); conn.close()
         return {'statusCode': 200, 'headers': HEADERS,
                 'body': json.dumps({
                     'balance': new_balance,
                     'cashback_earned': cashback_earned,
                     'first_deposit_bonus': first_deposit_bonus,
+                    'new_achievements': new_achievements,
                 }), 'isBase64Encoded': False}
 
     # ── LOGOUT ──
@@ -884,12 +1027,19 @@ def handler(event: dict, context) -> dict:
             RETURNING balance
         """, (bonus_amount, today, streak, user[0]))
         new_balance = float(cur.fetchone()[0])
+
+        new_achievements = check_and_unlock_achievements(cur, user[0])
+        if new_achievements:
+            cur.execute("SELECT balance FROM users WHERE id = %s", (user[0],))
+            new_balance = float(cur.fetchone()[0])
+
         conn.commit(); cur.close(); conn.close()
 
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
             'bonus': bonus_amount,
             'balance': new_balance,
             'streak': streak,
+            'new_achievements': new_achievements,
         }), 'isBase64Encoded': False}
 
     # ── DAILY STATUS (можно ли получить) ──
@@ -1031,10 +1181,15 @@ def handler(event: dict, context) -> dict:
             INSERT INTO game_history (user_id, game, bet, result, is_win, details)
             VALUES (%s, %s, %s, %s, %s, %s)
         """, (user[0], game, bet, result, is_win, json.dumps(details)))
+
+        new_achievements = check_and_unlock_achievements(cur, user[0])
         conn.commit(); cur.close(); conn.close()
 
         return {'statusCode': 200, 'headers': HEADERS,
-                'body': json.dumps({'success': True}), 'isBase64Encoded': False}
+                'body': json.dumps({
+                    'success': True,
+                    'new_achievements': new_achievements,
+                }), 'isBase64Encoded': False}
 
     # ── HISTORY (история ставок) ──
     if action == 'history' and http_method == 'GET':
@@ -1497,7 +1652,45 @@ def handler(event: dict, context) -> dict:
         return {'statusCode': 200, 'headers': HEADERS,
                 'body': json.dumps({'withdrawals': withdrawals}), 'isBase64Encoded': False}
 
-    # ── STATS: статистика игрока ──
+    # ── ACHIEVEMENTS (список достижений с прогрессом) ──
+    if action == 'achievements' and http_method == 'GET':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        # На случай если достижение стало доступно, но ещё не зафиксировано
+        # (например пользователь просто зашёл на страницу после ручного изменения БД)
+        newly = check_and_unlock_achievements(cur, user[0])
+        conn.commit()
+
+        cur.execute("""
+            SELECT achievement_id, unlocked_at FROM user_achievements WHERE user_id = %s
+        """, (user[0],))
+        unlocked_map = {row[0]: row[1].isoformat() for row in cur.fetchall()}
+        cur.close(); conn.close()
+
+        items = []
+        for ach in ACHIEVEMENTS:
+            items.append({
+                **ach,
+                'unlocked': ach['id'] in unlocked_map,
+                'unlocked_at': unlocked_map.get(ach['id']),
+            })
+
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'achievements': items,
+            'total_unlocked': len(unlocked_map),
+            'total_count': len(ACHIEVEMENTS),
+            'newly_unlocked': newly,
+        }), 'isBase64Encoded': False}
+
+    # ── STATS ──
     if action == 'stats' and http_method == 'GET':
         if not token:
             cur.close(); conn.close()

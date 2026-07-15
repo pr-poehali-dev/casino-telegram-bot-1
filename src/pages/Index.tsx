@@ -18,7 +18,7 @@ import HiLoGame from '@/components/HiLoGame';
 import BingoGame from '@/components/BingoGame';
 import KenoGame from '@/components/KenoGame';
 
-type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard' | 'spin' | 'verify-email' | 'verify-phone';
+type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard' | 'spin' | 'verify-email' | 'verify-phone' | 'achievements';
 
 const GAMES = [
   { id: 'roulette', name: 'Рулетка', icon: 'CircleDot', desc: 'Красное или чёрное', accent: 'crimson', emoji: '🎡' },
@@ -60,6 +60,11 @@ interface AuthUser {
   email_verified?: boolean;
   phone?: string | null;
   phone_verified?: boolean;
+}
+
+interface Achievement {
+  id: string; name: string; desc: string; icon: string; reward: number; category: string;
+  unlocked?: boolean; unlocked_at?: string | null;
 }
 
 function useAnimatedNumber(value: number, duration = 600) {
@@ -184,6 +189,25 @@ export default function Index() {
   };
 
   // Запись результата игры в историю
+  // addToBalance=true — прибавить награду к локальному балансу (для эндпоинтов,
+  // которые не возвращают итоговый баланс с учётом наград). Для action=balance
+  // сервер уже включает награду в возвращаемый balance — там addToBalance=false.
+  const notifyNewAchievements = useCallback((list?: Achievement[], addToBalance = true) => {
+    if (!list || list.length === 0) return;
+    list.forEach((a, i) => {
+      setTimeout(() => {
+        toast.success(`${a.icon} Достижение открыто: ${a.name}`, {
+          description: a.reward > 0 ? `+${a.reward.toLocaleString('ru')} ₽ на баланс` : a.desc,
+          duration: 5000,
+        });
+      }, i * 700);
+    });
+    if (addToBalance) {
+      const totalReward = list.reduce((s, a) => s + (a.reward || 0), 0);
+      if (totalReward > 0) setBalance(b => b + totalReward);
+    }
+  }, []);
+
   const recordGame = useCallback(async (gameName: string, bet: number, result: number, isWin: boolean, details: object) => {
     const token = localStorage.getItem(AUTH_TOKEN_KEY);
     if (!token) return;
@@ -191,8 +215,8 @@ export default function Index() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
       body: JSON.stringify({ game: gameName, bet, result, is_win: isWin, details }),
-    }).catch(() => {});
-  }, []);
+    }).then(r => r.json()).then(d => notifyNewAchievements(d.new_achievements)).catch(() => {});
+  }, [notifyNewAchievements]);
 
   // Синхронизируем баланс с БД при изменении.
   // Баланс обновляется оптимистично, но при отказе сервера (лимит ставки,
@@ -218,6 +242,7 @@ export default function Index() {
               duration: 6000,
             });
           }
+          notifyNewAchievements(data.new_achievements, false);
           // Обновляем данные пользователя (VIP-уровень и флаг бонуса)
           fetch(`${AUTH_API}?action=me`, { headers: { 'X-Auth-Token': token } })
             .then(r => r.json()).then(d => { if (d.user) setUser(d.user); }).catch(() => {});
@@ -235,7 +260,7 @@ export default function Index() {
       setBalance(b => b - delta);
       toast.error('Ошибка сети, баланс не обновлён');
     }
-  }, []);
+  }, [notifyNewAchievements]);
 
   const notify = (msg: string) => toast(msg, { description: 'Эта функция настраивается отдельно — напишите детали.' });
 
@@ -401,6 +426,7 @@ export default function Index() {
               {section === 'spin' && <DailySpinView onBack={() => setSection('home')} onClaimed={(prize, bal) => { setBalance(bal); setCanSpin(false); }} />}
               {section === 'verify-email' && <EmailVerifyView user={user} onBack={() => setSection('profile')} onVerified={() => handleUserUpdate({ email_verified: true })} />}
               {section === 'verify-phone' && <PhoneVerifyView user={user} onBack={() => setSection('withdraw')} onVerified={() => handleUserUpdate({ phone_verified: true })} />}
+              {section === 'achievements' && <AchievementsView onBack={() => setSection('profile')} />}
             </>
           )}
         </main>
@@ -2134,6 +2160,7 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
     { name: 'Вывод средств', icon: 'ArrowUpFromLine', action: () => setSection('withdraw') },
     { name: 'Колесо фортуны 🎡', icon: 'RefreshCw', action: () => setSection('spin'), highlight: true },
     { name: 'История игр', icon: 'History', action: () => setSection('history') },
+    { name: 'Достижения 🏆', icon: 'Award', action: () => setSection('achievements') },
     { name: 'Пригласить друга', icon: 'UserPlus', action: () => setSection('referral'), highlight: true },
     { name: 'Статистика', icon: 'TrendingUp', action: () => setSection('stats') },
     { name: 'Поддержка', icon: 'Headphones', action: () => setSection('support') },
@@ -3227,6 +3254,105 @@ function PhoneVerifyView({ user, onBack, onVerified }: { user: AuthUser | null; 
             Изменить номер телефона
           </button>
         </div>
+      )}
+    </div>
+  );
+}
+
+const ACHIEVEMENT_CATEGORY_LABELS: Record<string, string> = {
+  games: 'Игровая активность',
+  wins: 'Победы',
+  bigwin: 'Крупные выигрыши',
+  deposit: 'Депозиты',
+  daily: 'Ежедневная активность',
+  referral: 'Рефералы',
+  vip: 'VIP-статус',
+};
+
+function AchievementsView({ onBack }: { onBack: () => void }) {
+  const [achievements, setAchievements] = useState<Achievement[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [totalUnlocked, setTotalUnlocked] = useState(0);
+
+  useEffect(() => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+    fetch(`${AUTH_API}?action=achievements`, { headers: { 'X-Auth-Token': token } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d) {
+          setAchievements(d.achievements || []);
+          setTotalUnlocked(d.total_unlocked || 0);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const total = achievements.length;
+  const progressPct = total > 0 ? Math.round((totalUnlocked / total) * 100) : 0;
+
+  const categories = Array.from(new Set(achievements.map(a => a.category)));
+
+  return (
+    <div className="space-y-5 animate-float-up">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold shrink-0">
+          <Icon name="ArrowLeft" size={20} />
+        </button>
+        <div>
+          <h2 className="font-display text-xl font-bold">Достижения</h2>
+          <p className="text-xs text-muted-foreground">Бейджи за активность и награды</p>
+        </div>
+      </div>
+
+      {/* Общий прогресс */}
+      <div className="glass rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-semibold">Прогресс</span>
+          <span className="text-sm text-gold font-bold">{totalUnlocked} / {total}</span>
+        </div>
+        <div className="w-full h-2.5 bg-white/5 rounded-full overflow-hidden">
+          <div className="h-full gold-gradient rounded-full transition-all" style={{ width: `${progressPct}%` }} />
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-10">
+          <Icon name="Loader" size={24} className="animate-spin text-gold" />
+        </div>
+      ) : (
+        categories.map(cat => (
+          <div key={cat} className="space-y-3">
+            <p className="text-xs text-muted-foreground uppercase tracking-wider">
+              {ACHIEVEMENT_CATEGORY_LABELS[cat] || cat}
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              {achievements.filter(a => a.category === cat).map(a => (
+                <div key={a.id}
+                  className={`glass rounded-2xl p-4 flex flex-col items-center text-center gap-2 transition-all ${
+                    a.unlocked ? 'border border-gold/30 glow-gold' : 'opacity-50 grayscale'
+                  }`}
+                >
+                  <div className="text-3xl">{a.icon}</div>
+                  <div className="text-sm font-bold leading-tight">{a.name}</div>
+                  <div className="text-[11px] text-muted-foreground leading-tight">{a.desc}</div>
+                  {a.reward > 0 && (
+                    <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                      a.unlocked ? 'bg-gold/15 text-gold' : 'bg-white/5 text-muted-foreground'
+                    }`}>
+                      +{a.reward.toLocaleString('ru')} ₽
+                    </span>
+                  )}
+                  {a.unlocked && (
+                    <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-semibold">
+                      <Icon name="CheckCircle" size={11} /> Получено
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ))
       )}
     </div>
   );
