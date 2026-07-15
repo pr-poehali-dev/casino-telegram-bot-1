@@ -257,6 +257,49 @@ def get_client_ip(event: dict) -> str:
     return identity.get('sourceIp', 'unknown')
 
 
+def assign_ab_variant(cur, user_id: int, test_type: str) -> dict | None:
+    """
+    Распределяет нового пользователя по активному A/B тесту заданного типа
+    (если такой тест сейчас запущен). Возвращает данные назначенного варианта
+    или None, если активного теста нет.
+    """
+    cur.execute("""
+        SELECT id, variant_a_value, variant_b_value, traffic_split
+        FROM ab_tests WHERE test_type = %s AND status = 'running'
+        LIMIT 1
+    """, (test_type,))
+    test = cur.fetchone()
+    if not test:
+        return None
+
+    test_id, value_a, value_b, traffic_split = test
+    variant = 'B' if random.randint(1, 100) <= traffic_split else 'A'
+    value = float(value_b) if variant == 'B' else float(value_a)
+
+    cur.execute("""
+        INSERT INTO ab_test_assignments (test_id, user_id, variant)
+        VALUES (%s, %s, %s) ON CONFLICT (test_id, user_id) DO NOTHING
+    """, (test_id, user_id, variant))
+
+    return {'test_id': test_id, 'variant': variant, 'value': value}
+
+
+def record_ab_conversion(cur, user_id: int, test_type: str, value: float):
+    """Отмечает конверсию пользователя в активном A/B тесте (если он в нём участвует)."""
+    cur.execute("""
+        SELECT a.id FROM ab_test_assignments a
+        JOIN ab_tests t ON t.id = a.test_id
+        WHERE a.user_id = %s AND t.test_type = %s AND a.converted = FALSE
+        ORDER BY a.assigned_at DESC LIMIT 1
+    """, (user_id, test_type))
+    row = cur.fetchone()
+    if row:
+        cur.execute("""
+            UPDATE ab_test_assignments SET converted = TRUE, converted_at = NOW(), conversion_value = %s
+            WHERE id = %s
+        """, (value, row[0]))
+
+
 def send_email(to: str, subject: str, html: str):
     """Отправка email через Gmail SMTP"""
     gmail_user = os.environ.get('GMAIL_USER', '')
@@ -469,6 +512,9 @@ def handler(event: dict, context) -> dict:
             INSERT INTO email_verifications (user_id, code, expires_at)
             VALUES (%s, %s, NOW() + make_interval(mins => %s))
         """, (user_id, code, EMAIL_CODE_TTL_MIN))
+
+        # Распределяем нового игрока по активному A/B тесту бонуса первого депозита (если есть)
+        assign_ab_variant(cur, user_id, 'first_deposit_bonus')
 
         conn.commit(); cur.close(); conn.close()
 
@@ -901,13 +947,24 @@ def handler(event: dict, context) -> dict:
             loyalty_level = calc_loyalty_level(int(user[14]) if len(user) > 14 else 0)
             loyalty_earned = round(abs(delta) * LOYALTY_POINTS_PER_RUB * loyalty_level['multiplier'])
 
-        # Проверяем бонус первого депозита
+        # Проверяем бонус первого депозита (процент может быть переопределён A/B тестом)
         first_deposit_bonus = 0.0
         if is_deposit and delta > 0:
             cur.execute("SELECT first_deposit_bonus_claimed FROM users WHERE id = %s", (user[0],))
             claimed = cur.fetchone()[0]
             if not claimed:
-                first_deposit_bonus = round(delta * 1.0, 2)  # +100%
+                bonus_pct = 1.0  # стандартный бонус +100%
+                cur.execute("""
+                    SELECT a.variant, t.variant_a_value, t.variant_b_value
+                    FROM ab_test_assignments a JOIN ab_tests t ON t.id = a.test_id
+                    WHERE a.user_id = %s AND t.test_type = 'first_deposit_bonus'
+                    ORDER BY a.assigned_at DESC LIMIT 1
+                """, (user[0],))
+                ab_row = cur.fetchone()
+                if ab_row:
+                    variant, val_a, val_b = ab_row
+                    bonus_pct = float(val_b if variant == 'B' else val_a) / 100
+                first_deposit_bonus = round(delta * bonus_pct, 2)
 
         # При депозите обновляем total_deposited и пересчитываем vip_level
         total_credit = delta + first_deposit_bonus
@@ -969,6 +1026,9 @@ def handler(event: dict, context) -> dict:
             if new_achievements:
                 cur.execute("SELECT balance FROM users WHERE id = %s", (user[0],))
                 new_balance = float(cur.fetchone()[0])
+            # Первый депозит — фиксируем конверсию в A/B тесте (если пользователь в нём участвует)
+            if first_deposit_bonus > 0:
+                record_ab_conversion(cur, user[0], 'first_deposit_bonus', delta)
 
         conn.commit(); cur.close(); conn.close()
         return {'statusCode': 200, 'headers': HEADERS,

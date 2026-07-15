@@ -4050,6 +4050,7 @@ function SectionTitle({ title, subtitle, icon }: { title: string; subtitle: stri
 }
 
 const ADMIN_API = 'https://functions.poehali.dev/fc579833-522a-4863-abbc-24eece05648f';
+const AB_TESTS_API = 'https://functions.poehali.dev/cb635d45-413c-4c9a-9279-91ca31d6f5c6';
 
 const STATUS_META: Record<string, { label: string; color: string }> = {
   pending:    { label: 'На рассмотрении', color: 'text-amber-400' },
@@ -4093,7 +4094,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
   const [password, setPassword] = useState('');
   const [authed, setAuthed] = useState(false);
   const [authError, setAuthError] = useState('');
-  const [tab, setTab] = useState<'withdrawals' | 'orders' | 'top' | 'promos' | 'support' | 'cohorts'>('withdrawals');
+  const [tab, setTab] = useState<'withdrawals' | 'orders' | 'top' | 'promos' | 'support' | 'cohorts' | 'abtests'>('withdrawals');
   const [topDepositors, setTopDepositors] = useState<{ rank: number; user_id: number; username: string; email: string; deposits_count: number; total_deposited: number; last_deposit: string | null; balance: number }[]>([]);
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -4259,6 +4260,90 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
     }
   }, []);
 
+  // A/B тесты акций
+  interface AbVariantResult { participants: number; conversions: number; conversion_rate: number; total_value: number; avg_value?: number; }
+  interface AbTest {
+    id: number; name: string; description: string; test_type: string; status: 'draft' | 'running' | 'stopped';
+    variant_a_label: string; variant_a_value: number; variant_b_label: string; variant_b_value: number;
+    traffic_split: number; created_at: string; started_at: string | null; stopped_at: string | null;
+    results: { A: AbVariantResult; B: AbVariantResult };
+  }
+  const [abTests, setAbTests] = useState<AbTest[]>([]);
+  const [abLoading, setAbLoading] = useState(false);
+  const [abForm, setAbForm] = useState({
+    name: '', description: '',
+    variant_a_label: 'Без изменений', variant_a_value: '100',
+    variant_b_label: 'Тест', variant_b_value: '150',
+    traffic_split: '50',
+  });
+  const [abSaving, setAbSaving] = useState(false);
+  const [abError, setAbError] = useState('');
+  const [abFormOpen, setAbFormOpen] = useState(false);
+
+  const fetchAbTests = useCallback(async (pwd: string) => {
+    setAbLoading(true);
+    try {
+      const res = await fetch(AB_TESTS_API, { headers: { 'X-Admin-Password': pwd } });
+      if (res.ok) {
+        const data = await res.json();
+        setAbTests(data.tests || []);
+      }
+    } finally {
+      setAbLoading(false);
+    }
+  }, []);
+
+  const createAbTest = async () => {
+    if (!abForm.name.trim()) { setAbError('Укажи название теста'); return; }
+    setAbSaving(true); setAbError('');
+    try {
+      const res = await fetch(AB_TESTS_API, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Admin-Password': passwordRef.current },
+        body: JSON.stringify({
+          name: abForm.name.trim(),
+          description: abForm.description.trim(),
+          test_type: 'first_deposit_bonus',
+          variant_a_label: abForm.variant_a_label.trim() || 'A',
+          variant_a_value: parseFloat(abForm.variant_a_value) || 0,
+          variant_b_label: abForm.variant_b_label.trim() || 'B',
+          variant_b_value: parseFloat(abForm.variant_b_value) || 0,
+          traffic_split: parseInt(abForm.traffic_split) || 50,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) { setAbError(d.error || 'Ошибка'); return; }
+      setAbForm({ name: '', description: '', variant_a_label: 'Без изменений', variant_a_value: '100', variant_b_label: 'Тест', variant_b_value: '150', traffic_split: '50' });
+      setAbFormOpen(false);
+      fetchAbTests(passwordRef.current);
+    } finally {
+      setAbSaving(false);
+    }
+  };
+
+  const setAbTestStatus = async (id: number, status: 'running' | 'stopped') => {
+    const res = await fetch(AB_TESTS_API, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Password': passwordRef.current },
+      body: JSON.stringify({ id, status }),
+    });
+    const d = await res.json();
+    if (!res.ok) { toast.error(d.error || 'Ошибка'); return; }
+    fetchAbTests(passwordRef.current);
+  };
+
+  const deleteAbTest = async (id: number) => {
+    if (!confirm('Удалить тест?')) return;
+    const res = await fetch(AB_TESTS_API, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Password': passwordRef.current },
+      body: JSON.stringify({ id }),
+    });
+    const d = await res.json();
+    if (!res.ok) { toast.error(d.error || 'Ошибка'); return; }
+    fetchAbTests(passwordRef.current);
+  };
+
   const fetchData = useCallback(async (pwd: string, type: 'withdrawals' | 'orders', statusFilter = '') => {
     setLoading(true);
     try {
@@ -4295,7 +4380,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
     }
   };
 
-  const switchTab = (t: 'withdrawals' | 'orders' | 'top' | 'promos' | 'support' | 'cohorts') => {
+  const switchTab = (t: 'withdrawals' | 'orders' | 'top' | 'promos' | 'support' | 'cohorts' | 'abtests') => {
     setTab(t);
     setFilter('');
     setSelected(null);
@@ -4305,6 +4390,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
     if (t === 'promos') fetchPromos(passwordRef.current);
     if (t === 'support') fetchSupportChats(passwordRef.current);
     if (t === 'cohorts') fetchCohorts(passwordRef.current, cohortWeeksRange);
+    if (t === 'abtests') fetchAbTests(passwordRef.current);
   };
 
   // Запрос разрешения на push-уведомления при входе
@@ -4594,7 +4680,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       </div>
 
       {/* Вкладки */}
-      <div className="grid grid-cols-6 gap-1.5">
+      <div className="grid grid-cols-4 gap-1.5">
         <button onClick={() => switchTab('withdrawals')}
           className={`py-2.5 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all
             ${tab === 'withdrawals' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
@@ -4636,10 +4722,19 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
           <Icon name="Users" size={14} />
           <span>Когорты</span>
         </button>
+        <button onClick={() => switchTab('abtests')}
+          className={`py-2.5 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all relative
+            ${tab === 'abtests' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
+          <Icon name="FlaskConical" size={14} />
+          <span>A/B тесты</span>
+          {abTests.some(t => t.status === 'running') && (
+            <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-emerald-400" />
+          )}
+        </button>
       </div>
 
       {/* Итого */}
-      {tab !== 'top' && tab !== 'promos' && tab !== 'support' && tab !== 'cohorts' && currentList.length > 0 && (
+      {tab !== 'top' && tab !== 'promos' && tab !== 'support' && tab !== 'cohorts' && tab !== 'abtests' && currentList.length > 0 && (
         <div className="glass rounded-2xl p-4 flex justify-between items-center">
           <span className="text-sm text-muted-foreground">Сумма ({currentList.length} записей)</span>
           <span className="font-display font-bold gold-text text-lg">{totalAmount.toLocaleString('ru')} ₽</span>
@@ -4647,7 +4742,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       )}
 
       {/* Фильтр */}
-      {tab !== 'top' && tab !== 'promos' && tab !== 'support' && tab !== 'cohorts' && <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+      {tab !== 'top' && tab !== 'promos' && tab !== 'support' && tab !== 'cohorts' && tab !== 'abtests' && <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
         {[{ key: '', label: 'Все' }, ...Object.entries(filterMeta).map(([k, v]) => ({ key: k, label: v.label }))].map(f => (
           <button key={f.key} onClick={() => applyFilter(f.key)}
             className={`shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all
@@ -4657,11 +4752,11 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
         ))}
       </div>}
 
-      {loading && tab !== 'top' && tab !== 'promos' && tab !== 'support' && tab !== 'cohorts' ? (
+      {loading && tab !== 'top' && tab !== 'promos' && tab !== 'support' && tab !== 'cohorts' && tab !== 'abtests' ? (
         <div className="flex justify-center py-12 text-gold">
           <Icon name="Loader" size={28} className="animate-spin" />
         </div>
-      ) : !loading && tab !== 'top' && tab !== 'promos' && tab !== 'support' && tab !== 'cohorts' && currentList.length === 0 ? (
+      ) : !loading && tab !== 'top' && tab !== 'promos' && tab !== 'support' && tab !== 'cohorts' && tab !== 'abtests' && currentList.length === 0 ? (
         <div className="glass rounded-2xl p-10 text-center text-muted-foreground text-sm">
           Записей нет
         </div>
@@ -5010,6 +5105,152 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
                 ))}
               </div>
             </>
+          )}
+        </div>
+      ) : tab === 'abtests' ? (
+        <div className="space-y-4">
+          {/* Кнопка создания */}
+          <Button onClick={() => setAbFormOpen(v => !v)}
+            className="w-full gold-gradient text-background font-bold h-11 glow-gold flex items-center justify-center gap-2">
+            <Icon name={abFormOpen ? 'X' : 'Plus'} size={16} />
+            {abFormOpen ? 'Отмена' : 'Новый тест бонуса депозита'}
+          </Button>
+
+          {/* Форма создания */}
+          {abFormOpen && (
+            <div className="glass rounded-2xl p-4 space-y-3">
+              <p className="text-xs text-muted-foreground uppercase tracking-wider">Новый A/B тест</p>
+              <input className="w-full bg-background/60 border border-gold/20 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-gold/50"
+                placeholder="Название теста" value={abForm.name}
+                onChange={e => setAbForm(f => ({ ...f, name: e.target.value }))} />
+              <input className="w-full bg-background/60 border border-gold/20 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-gold/50"
+                placeholder="Описание (необязательно)" value={abForm.description}
+                onChange={e => setAbForm(f => ({ ...f, description: e.target.value }))} />
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1.5">
+                  <label className="text-[11px] text-muted-foreground">Вариант A — название</label>
+                  <input className="w-full bg-background/60 border border-gold/20 rounded-xl px-3 py-2 text-sm outline-none focus:border-gold/50"
+                    value={abForm.variant_a_label} onChange={e => setAbForm(f => ({ ...f, variant_a_label: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[11px] text-muted-foreground">Вариант A — бонус, %</label>
+                  <input type="number" className="w-full bg-background/60 border border-gold/20 rounded-xl px-3 py-2 text-sm outline-none focus:border-gold/50"
+                    value={abForm.variant_a_value} onChange={e => setAbForm(f => ({ ...f, variant_a_value: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[11px] text-muted-foreground">Вариант B — название</label>
+                  <input className="w-full bg-background/60 border border-gold/20 rounded-xl px-3 py-2 text-sm outline-none focus:border-gold/50"
+                    value={abForm.variant_b_label} onChange={e => setAbForm(f => ({ ...f, variant_b_label: e.target.value }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-[11px] text-muted-foreground">Вариант B — бонус, %</label>
+                  <input type="number" className="w-full bg-background/60 border border-gold/20 rounded-xl px-3 py-2 text-sm outline-none focus:border-gold/50"
+                    value={abForm.variant_b_value} onChange={e => setAbForm(f => ({ ...f, variant_b_value: e.target.value }))} />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] text-muted-foreground">Доля трафика на вариант B: {abForm.traffic_split}%</label>
+                <input type="range" min={1} max={99} value={abForm.traffic_split}
+                  onChange={e => setAbForm(f => ({ ...f, traffic_split: e.target.value }))}
+                  className="w-full accent-[hsl(43,74%,52%)]" />
+              </div>
+
+              {abError && (
+                <div className="flex items-center gap-2 text-xs text-red-400">
+                  <Icon name="AlertCircle" size={14} /> {abError}
+                </div>
+              )}
+
+              <Button onClick={createAbTest} disabled={abSaving}
+                className="w-full gold-gradient text-background font-bold h-11 glow-gold disabled:opacity-50">
+                {abSaving ? <Icon name="Loader" size={16} className="animate-spin" /> : 'Создать тест'}
+              </Button>
+            </div>
+          )}
+
+          {/* Список тестов */}
+          {abLoading ? (
+            <div className="flex justify-center py-12 text-gold">
+              <Icon name="Loader" size={28} className="animate-spin" />
+            </div>
+          ) : abTests.length === 0 ? (
+            <div className="glass rounded-2xl p-10 text-center text-muted-foreground text-sm">
+              Тестов пока нет — создай первый
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {abTests.map(t => {
+                const { A, B } = t.results;
+                const winner = A.conversion_rate === B.conversion_rate ? null
+                  : A.conversion_rate > B.conversion_rate ? 'A' : 'B';
+                const statusMeta = {
+                  draft:   { label: 'Черновик', color: 'text-muted-foreground', bg: 'bg-white/5' },
+                  running: { label: 'Активен',  color: 'text-emerald-400', bg: 'bg-emerald-400/10' },
+                  stopped: { label: 'Остановлен', color: 'text-red-400', bg: 'bg-red-400/10' },
+                }[t.status];
+                return (
+                  <div key={t.id} className="glass rounded-2xl p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-semibold text-sm">{t.name}</div>
+                        {t.description && <div className="text-xs text-muted-foreground mt-0.5">{t.description}</div>}
+                      </div>
+                      <span className={`text-[10px] font-bold px-2 py-1 rounded-full shrink-0 ${statusMeta.color} ${statusMeta.bg}`}>
+                        {statusMeta.label}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      {(['A', 'B'] as const).map(v => {
+                        const r = v === 'A' ? A : B;
+                        const label = v === 'A' ? t.variant_a_label : t.variant_b_label;
+                        const value = v === 'A' ? t.variant_a_value : t.variant_b_value;
+                        return (
+                          <div key={v}
+                            className={`rounded-xl p-3 border ${winner === v ? 'border-gold/50 bg-gold/5' : 'border-white/10'}`}>
+                            <div className="flex items-center justify-between mb-1.5">
+                              <span className="text-xs font-bold">{v} · {label}</span>
+                              {winner === v && <Icon name="Trophy" size={12} className="text-gold" />}
+                            </div>
+                            <div className="text-[11px] text-muted-foreground">Бонус {value}%</div>
+                            <div className="text-lg font-display font-bold gold-text mt-1">{r.conversion_rate}%</div>
+                            <div className="text-[11px] text-muted-foreground">
+                              {r.conversions} из {r.participants} конверсий
+                            </div>
+                            {r.total_value > 0 && (
+                              <div className="text-[11px] text-emerald-400 mt-0.5">{r.total_value.toLocaleString('ru')} ₽ депозитов</div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex gap-2">
+                      {t.status === 'draft' && (
+                        <button onClick={() => setAbTestStatus(t.id, 'running')}
+                          className="flex-1 py-2 rounded-xl text-xs font-semibold bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition-all flex items-center justify-center gap-1.5">
+                          <Icon name="Play" size={13} /> Запустить
+                        </button>
+                      )}
+                      {t.status === 'running' && (
+                        <button onClick={() => setAbTestStatus(t.id, 'stopped')}
+                          className="flex-1 py-2 rounded-xl text-xs font-semibold bg-red-500/15 text-red-400 hover:bg-red-500/25 transition-all flex items-center justify-center gap-1.5">
+                          <Icon name="Square" size={13} /> Остановить
+                        </button>
+                      )}
+                      {t.status === 'draft' && (
+                        <button onClick={() => deleteAbTest(t.id)}
+                          className="w-11 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 flex items-center justify-center transition-all">
+                          <Icon name="Trash2" size={13} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
       ) : null}
