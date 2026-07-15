@@ -4,7 +4,10 @@ import hashlib
 import secrets
 import random
 import base64
+import re
 import smtplib
+import urllib.request
+import urllib.parse
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import psycopg2
@@ -44,6 +47,42 @@ LOGIN_LOCKOUT_MIN_ACCOUNT  = 15   # на сколько минут блокир�
 LOGIN_MAX_ATTEMPTS_IP      = 20   # неудачных попыток с одного IP за окно
 LOGIN_IP_WINDOW_MIN        = 15   # окно наблюдения по IP (минут)
 LOGIN_LOCKOUT_MIN_IP       = 30   # на сколько минут блокируется IP
+
+# ── Phone-верификация ────────────────────────────────────────────────────────
+PHONE_CODE_TTL_MIN        = 15   # время жизни кода (минут)
+PHONE_CODE_MAX_ATTEMPTS   = 5    # макс. попыток ввода кода
+PHONE_RESEND_COOLDOWN_SEC = 60   # антиспам на повторную отправку
+PHONE_VERIFY_WITHDRAW_THRESHOLD = 25_000  # сумма вывода, с которой требуется телефон (₽)
+
+
+def normalize_phone(raw: str) -> str:
+    """Приводим телефон к формату 7XXXXXXXXXX (для SMS.ru)"""
+    digits = re.sub(r'\D', '', raw or '')
+    if len(digits) == 11 and digits.startswith('8'):
+        digits = '7' + digits[1:]
+    if len(digits) == 10:
+        digits = '7' + digits
+    return digits
+
+
+def send_sms(phone: str, text: str) -> bool:
+    """Отправка SMS через SMS.ru"""
+    api_key = os.environ.get('SMS_RU_API_KEY', '')
+    if not api_key or not phone:
+        return False
+    params = urllib.parse.urlencode({
+        'api_id': api_key,
+        'to': phone,
+        'msg': text,
+        'json': 1,
+    })
+    url = f'https://sms.ru/sms/send?{params}'
+    try:
+        with urllib.request.urlopen(url, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+            return data.get('status') == 'OK'
+    except Exception:
+        return False
 
 
 def get_client_ip(event: dict) -> str:
@@ -124,7 +163,7 @@ def get_user_by_token(cur, token: str):
     cur.execute("""
         SELECT u.id, u.email, u.username, u.balance, u.referral_code,
                u.vip_level, u.total_deposited, u.cashback_available, u.avatar_url,
-               u.first_deposit_bonus_claimed, u.email_verified
+               u.first_deposit_bonus_claimed, u.email_verified, u.phone, u.phone_verified
         FROM sessions s JOIN users u ON s.user_id = u.id
         WHERE s.token = %s AND s.expires_at > NOW()
     """, (token,))
@@ -150,6 +189,8 @@ def user_to_dict(u) -> dict:
         'avatar_url': u[8],
         'first_deposit_bonus_claimed': bool(u[9]) if len(u) > 9 else False,
         'email_verified': bool(u[10]) if len(u) > 10 else False,
+        'phone': u[11] if len(u) > 11 else None,
+        'phone_verified': bool(u[12]) if len(u) > 12 else False,
     }
 
 
@@ -163,6 +204,8 @@ def handler(event: dict, context) -> dict:
     POST ?action=balance   { delta } + X-Auth-Token
     POST ?action=send-verification  X-Auth-Token — отправить/повторить код на email
     POST ?action=verify-email       { code } + X-Auth-Token — подтвердить код
+    POST ?action=send-phone-code    { phone } + X-Auth-Token — отправить SMS-код
+    POST ?action=verify-phone       { code } + X-Auth-Token — подтвердить телефон
     GET  ?action=order-status&session_id=...
     """
     if event.get('httpMethod') == 'OPTIONS':
@@ -304,20 +347,21 @@ def handler(event: dict, context) -> dict:
             SELECT id, email, username, balance, referral_code,
                    vip_level, total_deposited, cashback_available,
                    avatar_url, first_deposit_bonus_claimed, email_verified,
+                   phone, phone_verified,
                    password_hash, failed_login_attempts, login_locked_until
             FROM users WHERE email = %s AND is_active = TRUE
         """, (email,))
         row = cur.fetchone()
 
-        if row and row[13]:
-            cur.execute("SELECT %s::timestamp > NOW()", (row[13],))
+        if row and row[15]:
+            cur.execute("SELECT %s::timestamp > NOW()", (row[15],))
             if cur.fetchone()[0]:
                 cur.close(); conn.close()
                 return {'statusCode': 429, 'headers': HEADERS,
                         'body': json.dumps({'error': 'Аккаунт временно заблокирован из-за неудачных попыток входа. Попробуй позже.'}),
                         'isBase64Encoded': False}
 
-        password_ok = bool(row) and row[11] == hash_password(password)
+        password_ok = bool(row) and row[13] == hash_password(password)
 
         if not password_ok:
             # Увеличиваем счётчик неудач по IP (upsert)
@@ -357,7 +401,7 @@ def handler(event: dict, context) -> dict:
         cur.execute("INSERT INTO sessions (user_id, token) VALUES (%s, %s)", (row[0], session_token))
         conn.commit(); cur.close(); conn.close()
 
-        user = row[:11]  # обрезаем служебные поля (password_hash, attempts, locked_until)
+        user = row[:13]  # обрезаем служебные поля (password_hash, attempts, locked_until)
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
             'token': session_token,
             'user': user_to_dict(user)
@@ -480,6 +524,121 @@ def handler(event: dict, context) -> dict:
 
         cur.execute("UPDATE email_verifications SET used = TRUE WHERE id = %s", (verification_id,))
         cur.execute("UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = %s", (user[0],))
+        conn.commit(); cur.close(); conn.close()
+
+        return {'statusCode': 200, 'headers': HEADERS,
+                'body': json.dumps({'success': True}), 'isBase64Encoded': False}
+
+    # ── SEND PHONE CODE (запросить/повторно отправить SMS-код) ──
+    if action == 'send-phone-code' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        if bool(user[12]):
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Телефон уже подтверждён'}), 'isBase64Encoded': False}
+
+        raw_phone = str(body.get('phone', '')).strip()
+        phone = normalize_phone(raw_phone)
+        if len(phone) != 11 or not phone.startswith('7'):
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Введите корректный номер телефона'}), 'isBase64Encoded': False}
+
+        # Антиспам: не чаще одного SMS в PHONE_RESEND_COOLDOWN_SEC секунд
+        cur.execute("""
+            SELECT EXTRACT(EPOCH FROM (NOW() - created_at)) FROM phone_verifications
+            WHERE user_id = %s ORDER BY created_at DESC LIMIT 1
+        """, (user[0],))
+        last = cur.fetchone()
+        if last and last[0] is not None and last[0] < PHONE_RESEND_COOLDOWN_SEC:
+            wait = int(PHONE_RESEND_COOLDOWN_SEC - last[0])
+            cur.close(); conn.close()
+            return {'statusCode': 429, 'headers': HEADERS,
+                    'body': json.dumps({'error': f'Подожди {wait} сек. перед повторной отправкой'}),
+                    'isBase64Encoded': False}
+
+        code = f"{random.randint(0, 999999):06d}"
+        cur.execute("""
+            INSERT INTO phone_verifications (user_id, phone, code, expires_at)
+            VALUES (%s, %s, %s, NOW() + make_interval(mins => %s))
+        """, (user[0], phone, code, PHONE_CODE_TTL_MIN))
+        cur.execute("UPDATE users SET phone = %s, updated_at = NOW() WHERE id = %s", (phone, user[0]))
+        conn.commit(); cur.close(); conn.close()
+
+        try:
+            send_sms(phone, f'{code} — код подтверждения телефона')
+        except Exception:
+            pass
+
+        return {'statusCode': 200, 'headers': HEADERS,
+                'body': json.dumps({'success': True}), 'isBase64Encoded': False}
+
+    # ── VERIFY PHONE (ввод SMS-кода) ──
+    if action == 'verify-phone' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        if bool(user[12]):
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Телефон уже подтверждён'}), 'isBase64Encoded': False}
+
+        code_input = str(body.get('code', '')).strip()
+        if not code_input:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Введите код'}), 'isBase64Encoded': False}
+
+        cur.execute("""
+            SELECT id, code, expires_at, attempts FROM phone_verifications
+            WHERE user_id = %s AND used = FALSE
+            ORDER BY created_at DESC LIMIT 1
+        """, (user[0],))
+        row = cur.fetchone()
+        if not row:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Код не найден, запроси новый'}), 'isBase64Encoded': False}
+
+        verification_id, real_code, expires_at, attempts = row
+
+        if attempts >= PHONE_CODE_MAX_ATTEMPTS:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Превышено число попыток. Запроси новый код'}),
+                    'isBase64Encoded': False}
+
+        cur.execute("SELECT NOW() > %s", (expires_at,))
+        is_expired = cur.fetchone()[0]
+        if is_expired:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Код истёк, запроси новый'}), 'isBase64Encoded': False}
+
+        if code_input != real_code:
+            cur.execute("UPDATE phone_verifications SET attempts = attempts + 1 WHERE id = %s", (verification_id,))
+            conn.commit(); cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Неверный код'}), 'isBase64Encoded': False}
+
+        cur.execute("UPDATE phone_verifications SET used = TRUE WHERE id = %s", (verification_id,))
+        cur.execute("UPDATE users SET phone_verified = TRUE, updated_at = NOW() WHERE id = %s", (user[0],))
         conn.commit(); cur.close(); conn.close()
 
         return {'statusCode': 200, 'headers': HEADERS,

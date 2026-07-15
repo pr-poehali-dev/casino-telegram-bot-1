@@ -18,7 +18,7 @@ import HiLoGame from '@/components/HiLoGame';
 import BingoGame from '@/components/BingoGame';
 import KenoGame from '@/components/KenoGame';
 
-type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard' | 'spin' | 'verify-email';
+type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard' | 'spin' | 'verify-email' | 'verify-phone';
 
 const GAMES = [
   { id: 'roulette', name: 'Рулетка', icon: 'CircleDot', desc: 'Красное или чёрное', accent: 'crimson', emoji: '🎡' },
@@ -58,6 +58,8 @@ interface AuthUser {
   avatar_url?: string | null;
   first_deposit_bonus_claimed?: boolean;
   email_verified?: boolean;
+  phone?: string | null;
+  phone_verified?: boolean;
 }
 
 function useAnimatedNumber(value: number, duration = 600) {
@@ -398,6 +400,7 @@ export default function Index() {
               {section === 'leaderboard' && <LeaderboardView />}
               {section === 'spin' && <DailySpinView onBack={() => setSection('home')} onClaimed={(prize, bal) => { setBalance(bal); setCanSpin(false); }} />}
               {section === 'verify-email' && <EmailVerifyView user={user} onBack={() => setSection('profile')} onVerified={() => handleUserUpdate({ email_verified: true })} />}
+              {section === 'verify-phone' && <PhoneVerifyView user={user} onBack={() => setSection('withdraw')} onVerified={() => handleUserUpdate({ phone_verified: true })} />}
             </>
           )}
         </main>
@@ -1189,6 +1192,8 @@ function WithdrawView({ balance, notify: _notify, user, setSection }: { balance:
     min_withdraw: number; max_withdraw: number;
     daily_limit: number; daily_used: number; daily_left: number;
     email_verified?: boolean;
+    phone_verified?: boolean;
+    phone_verify_threshold?: number;
   } | null>(null);
 
   useEffect(() => {
@@ -1270,8 +1275,14 @@ function WithdrawView({ balance, notify: _notify, user, setSection }: { balance:
         setWithdrawalId(data.withdrawal_id);
         setWdStatus('pending');
         setStep('success');
+      } else if (data.error === 'phone_not_verified') {
+        toast.error(data.message || 'Подтверди телефон перед выводом');
+        setSection?.('verify-phone');
+      } else if (data.error === 'email_not_verified') {
+        toast.error(data.message || 'Подтверди email перед выводом');
+        setSection?.('verify-email');
       } else {
-        toast.error(data.error || 'Ошибка отправки заявки');
+        toast.error(data.message || data.error || 'Ошибка отправки заявки');
       }
     } catch {
       toast.error('Ошибка сети, попробуй ещё раз');
@@ -1487,7 +1498,9 @@ function WithdrawView({ balance, notify: _notify, user, setSection }: { balance:
   if (step === 'form' && method) {
     const minAmt = Math.max(method.min, limits?.min_withdraw ?? method.min);
     const maxAmt = Math.min(balance, limits?.max_withdraw ?? 50000, limits?.daily_left ?? 100000);
-    const valid = parsedAmount >= minAmt && parsedAmount <= maxAmt && destination.length >= 8;
+    const phoneThreshold = limits?.phone_verify_threshold ?? 25000;
+    const needsPhone = parsedAmount >= phoneThreshold && !limits?.phone_verified;
+    const valid = parsedAmount >= minAmt && parsedAmount <= maxAmt && destination.length >= 8 && !needsPhone;
     const presets = [500, 1000, 2000, 5000].filter(v => v <= maxAmt);
     return (
       <div className="space-y-5">
@@ -1583,6 +1596,22 @@ function WithdrawView({ balance, notify: _notify, user, setSection }: { balance:
             <div className="flex items-center gap-2 text-xs text-amber-400">
               <Icon name="AlertTriangle" size={14} /> Суточный лимит почти исчерпан. Осталось {limits.daily_left.toLocaleString('ru')} ₽
             </div>
+          )}
+
+          {needsPhone && (
+            <button
+              onClick={() => setSection?.('verify-phone')}
+              className="w-full flex items-center gap-3 rounded-2xl px-4 py-3 border border-amber-400/40 bg-amber-400/5 hover:bg-amber-400/10 transition-all text-left"
+            >
+              <div className="w-9 h-9 rounded-xl bg-amber-400/15 flex items-center justify-center shrink-0">
+                <Icon name="Smartphone" size={17} className="text-amber-400" />
+              </div>
+              <div className="flex-1">
+                <div className="text-sm font-bold text-amber-400">Подтверди телефон</div>
+                <div className="text-xs text-muted-foreground mt-0.5">Для вывода от {phoneThreshold.toLocaleString('ru')} ₽ нужен подтверждённый номер</div>
+              </div>
+              <Icon name="ChevronRight" size={16} className="text-amber-400 shrink-0" />
+            </button>
           )}
         </div>
 
@@ -2185,6 +2214,19 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
               <button onClick={() => setSection('verify-email')}
                 className="inline-flex items-center gap-0.5 text-amber-400 text-[10px] font-semibold hover:underline">
                 <Icon name="AlertTriangle" size={12} /> не подтверждён
+              </button>
+            )}
+          </p>
+          <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5 mt-0.5">
+            <Icon name="Smartphone" size={11} className="opacity-60" />
+            {user?.phone_verified ? (
+              <span className="inline-flex items-center gap-0.5 text-emerald-400 text-[10px] font-semibold">
+                <Icon name="BadgeCheck" size={12} /> телефон подтверждён
+              </span>
+            ) : (
+              <button onClick={() => setSection('verify-phone')}
+                className="inline-flex items-center gap-0.5 text-muted-foreground text-[10px] font-semibold hover:text-amber-400 hover:underline transition-colors">
+                телефон не подтверждён
               </button>
             )}
           </p>
@@ -3015,6 +3057,177 @@ function EmailVerifyView({ user, onBack, onVerified }: { user: AuthUser | null; 
           {cooldown > 0 ? `Повторить через ${cooldown} сек.` : resending ? 'Отправка...' : 'Отправить код повторно'}
         </button>
       </div>
+    </div>
+  );
+}
+
+function PhoneVerifyView({ user, onBack, onVerified }: { user: AuthUser | null; onBack: () => void; onVerified: () => void }) {
+  const [step, setStep] = useState<'phone' | 'code'>(user?.phone ? 'code' : 'phone');
+  const [phone, setPhone] = useState(user?.phone || '');
+  const [code, setCode] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [error, setError] = useState('');
+  const [cooldown, setCooldown] = useState(0);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setInterval(() => setCooldown(c => Math.max(0, c - 1)), 1000);
+    return () => clearInterval(t);
+  }, [cooldown]);
+
+  const formatPhone = (v: string) => {
+    const digits = v.replace(/\D/g, '').slice(0, 11);
+    if (!digits) return '';
+    let d = digits;
+    if (d[0] === '8') d = '7' + d.slice(1);
+    if (d[0] !== '7') d = '7' + d;
+    let out = '+7';
+    if (d.length > 1) out += ' (' + d.slice(1, 4);
+    if (d.length >= 4) out += ') ' + d.slice(4, 7);
+    if (d.length >= 7) out += '-' + d.slice(7, 9);
+    if (d.length >= 9) out += '-' + d.slice(9, 11);
+    return out;
+  };
+
+  const sendCode = async () => {
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length < 10) { setError('Введи корректный номер телефона'); return; }
+    setResending(true); setError('');
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+    try {
+      const res = await fetch(`${AUTH_API}?action=send-phone-code`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+        body: JSON.stringify({ phone: digits }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setStep('code');
+        setCooldown(60);
+        toast.success('Код отправлен по SMS');
+      } else {
+        setError(data.error || 'Не удалось отправить код');
+        if (res.status === 429) setCooldown(60);
+      }
+    } catch {
+      setError('Ошибка сети, попробуй снова');
+    } finally {
+      setResending(false);
+    }
+  };
+
+  const handleVerify = async () => {
+    if (code.length !== 6) { setError('Введи 6-значный код'); return; }
+    setLoading(true); setError('');
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+    try {
+      const res = await fetch(`${AUTH_API}?action=verify-phone`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success('Телефон подтверждён!');
+        onVerified();
+        onBack();
+      } else {
+        setError(data.error || 'Неверный код');
+      }
+    } catch {
+      setError('Ошибка сети, попробуй снова');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5 animate-float-up">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold shrink-0">
+          <Icon name="ArrowLeft" size={20} />
+        </button>
+        <div>
+          <h2 className="font-display text-xl font-bold">Подтверждение телефона</h2>
+          <p className="text-xs text-muted-foreground">Требуется для крупных выводов</p>
+        </div>
+      </div>
+
+      <div className="glass rounded-2xl p-5 flex flex-col items-center gap-3 text-center">
+        <div className="w-14 h-14 rounded-2xl gold-gradient flex items-center justify-center glow-gold">
+          <Icon name="Smartphone" size={26} className="text-background" />
+        </div>
+        {step === 'phone' ? (
+          <p className="text-sm text-muted-foreground">Введи номер телефона — пришлём код по SMS</p>
+        ) : (
+          <div>
+            <p className="text-sm text-muted-foreground">Код отправлен на</p>
+            <p className="font-semibold">{formatPhone(phone)}</p>
+          </div>
+        )}
+      </div>
+
+      {step === 'phone' ? (
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Номер телефона</label>
+            <input
+              className="w-full bg-background/60 border border-gold/20 rounded-xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-foreground text-lg"
+              placeholder="+7 (___) ___-__-__"
+              value={formatPhone(phone)}
+              onChange={e => setPhone(e.target.value.replace(/\D/g, ''))}
+              inputMode="tel"
+            />
+          </div>
+
+          {error && (
+            <div className="flex items-center gap-2 text-xs text-red-400">
+              <Icon name="AlertCircle" size={14} /> {error}
+            </div>
+          )}
+
+          <Button onClick={sendCode} disabled={resending}
+            className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
+            {resending ? <Icon name="Loader" size={20} className="animate-spin" /> : 'Получить код'}
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Код из SMS</label>
+            <input
+              className="w-full bg-background/60 border border-gold/20 rounded-xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-foreground text-center font-display text-2xl tracking-[0.5em] placeholder:tracking-normal placeholder:text-base"
+              placeholder="000000"
+              value={code}
+              onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              inputMode="numeric"
+              maxLength={6}
+            />
+          </div>
+
+          {error && (
+            <div className="flex items-center gap-2 text-xs text-red-400">
+              <Icon name="AlertCircle" size={14} /> {error}
+            </div>
+          )}
+
+          <Button onClick={handleVerify} disabled={loading || code.length !== 6}
+            className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
+            {loading ? <Icon name="Loader" size={20} className="animate-spin" /> : 'Подтвердить'}
+          </Button>
+
+          <button onClick={sendCode} disabled={resending || cooldown > 0}
+            className="w-full text-center text-sm text-muted-foreground hover:text-gold transition-colors disabled:opacity-50 py-2">
+            {cooldown > 0 ? `Повторить через ${cooldown} сек.` : resending ? 'Отправка...' : 'Отправить код повторно'}
+          </button>
+
+          <button onClick={() => { setStep('phone'); setCode(''); setError(''); }}
+            className="w-full text-center text-xs text-muted-foreground hover:text-gold transition-colors">
+            Изменить номер телефона
+          </button>
+        </div>
+      )}
     </div>
   );
 }
