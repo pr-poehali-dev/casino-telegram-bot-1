@@ -18,7 +18,7 @@ import HiLoGame from '@/components/HiLoGame';
 import BingoGame from '@/components/BingoGame';
 import KenoGame from '@/components/KenoGame';
 
-type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard' | 'spin';
+type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard' | 'spin' | 'verify-email';
 
 const GAMES = [
   { id: 'roulette', name: 'Рулетка', icon: 'CircleDot', desc: 'Красное или чёрное', accent: 'crimson', emoji: '🎡' },
@@ -57,6 +57,7 @@ interface AuthUser {
   next_vip_level?: string; next_vip_label?: string; next_vip_min?: number; next_vip_emoji?: string;
   avatar_url?: string | null;
   first_deposit_bonus_claimed?: boolean;
+  email_verified?: boolean;
 }
 
 function useAnimatedNumber(value: number, duration = 600) {
@@ -386,7 +387,7 @@ export default function Index() {
               {section === 'home' && <HomeView balance={balance} setSection={setSection} openGame={openGame} notify={notify} canClaimBonus={canClaimBonus} user={user} canSpin={canSpin} />}
               {section === 'games' && <GamesView openGame={openGame} />}
               {section === 'deposit' && <DepositView notify={notify} onBalanceChange={syncBalance} />}
-              {section === 'withdraw' && <WithdrawView balance={balance} notify={notify} />}
+              {section === 'withdraw' && <WithdrawView balance={balance} notify={notify} user={user} setSection={setSection} />}
               {section === 'stats' && <StatsView />}
               {section === 'profile' && <ProfileView setSection={setSection} notify={notify} user={user} onLogout={handleLogout} onBalanceChange={syncBalance} onUserUpdate={handleUserUpdate} theme={theme} onToggleTheme={toggleTheme} />}
               {section === 'support' && <SupportView notify={notify} />}
@@ -396,6 +397,7 @@ export default function Index() {
               {section === 'history' && <GameHistoryView onBack={() => setSection('profile')} />}
               {section === 'leaderboard' && <LeaderboardView />}
               {section === 'spin' && <DailySpinView onBack={() => setSection('home')} onClaimed={(prize, bal) => { setBalance(bal); setCanSpin(false); }} />}
+              {section === 'verify-email' && <EmailVerifyView user={user} onBack={() => setSection('profile')} onVerified={() => handleUserUpdate({ email_verified: true })} />}
             </>
           )}
         </main>
@@ -1168,7 +1170,7 @@ const WD_STATUS_META: Record<string, { label: string; color: string; icon: strin
   rejected:   { label: 'Отклонено',        color: 'text-red-400',     icon: 'XCircle' },
 };
 
-function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (m: string) => void }) {
+function WithdrawView({ balance, notify: _notify, user, setSection }: { balance: number; notify: (m: string) => void; user?: AuthUser | null; setSection?: (s: Section) => void }) {
   const [step, setStep] = useState<WithdrawStep>('method');
   const [method, setMethod] = useState<typeof WITHDRAW_METHODS[0] | null>(null);
   const [amount, setAmount] = useState('');
@@ -1186,6 +1188,7 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
   const [limits, setLimits] = useState<{
     min_withdraw: number; max_withdraw: number;
     daily_limit: number; daily_used: number; daily_left: number;
+    email_verified?: boolean;
   } | null>(null);
 
   useEffect(() => {
@@ -1642,7 +1645,24 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
         </div>
       </div>
 
-      {canWithdraw ? (
+      {/* Требуется подтверждение email — блокируем вывод */}
+      {limits && !limits.email_verified && (
+        <button
+          onClick={() => setSection?.('verify-email')}
+          className="animate-float-up w-full flex items-center gap-3 rounded-2xl px-4 py-4 border border-amber-400/40 bg-amber-400/5 hover:bg-amber-400/10 transition-all text-left"
+        >
+          <div className="w-11 h-11 rounded-xl bg-amber-400/15 flex items-center justify-center shrink-0">
+            <Icon name="ShieldAlert" size={20} className="text-amber-400" />
+          </div>
+          <div className="flex-1">
+            <div className="text-sm font-bold text-amber-400">Подтверди email перед выводом</div>
+            <div className="text-xs text-muted-foreground mt-0.5">Это займёт минуту и защитит твой аккаунт</div>
+          </div>
+          <Icon name="ChevronRight" size={18} className="text-amber-400 shrink-0" />
+        </button>
+      )}
+
+      {canWithdraw && limits?.email_verified ? (
         <div className="space-y-3">
           {WITHDRAW_METHODS.map((m, i) => (
             <button
@@ -1666,7 +1686,7 @@ function WithdrawView({ balance, notify: _notify }: { balance: number; notify: (
             </button>
           ))}
         </div>
-      ) : (
+      ) : canWithdraw ? null : (
         <div className="animate-float-up glass rounded-2xl p-6 flex flex-col items-center gap-3 text-center">
           <Icon name="TrendingUp" size={32} className="text-gold/40" />
           <p className="text-muted-foreground text-sm">Сыграй и выиграй, чтобы вывести средства</p>
@@ -2155,7 +2175,19 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
           )}
           {nameError && <p className="text-xs text-red-400 mb-1">{nameError}</p>}
 
-          <p className="text-xs text-muted-foreground">{user?.email}</p>
+          <p className="text-xs text-muted-foreground flex items-center justify-center gap-1.5">
+            {user?.email}
+            {user?.email_verified ? (
+              <span className="inline-flex items-center gap-0.5 text-emerald-400 text-[10px] font-semibold">
+                <Icon name="BadgeCheck" size={12} /> подтверждён
+              </span>
+            ) : (
+              <button onClick={() => setSection('verify-email')}
+                className="inline-flex items-center gap-0.5 text-amber-400 text-[10px] font-semibold hover:underline">
+                <Icon name="AlertTriangle" size={12} /> не подтверждён
+              </button>
+            )}
+          </p>
           <span className="inline-flex items-center gap-1.5 mt-2 text-xs font-bold px-3 py-1 rounded-full"
             style={{ color: vipColor, background: `${vipColor}18`, border: `1px solid ${vipColor}44` }}>
             {user?.vip_emoji || '⬜'} {user?.vip_label || 'Нет уровня'}
@@ -2859,6 +2891,131 @@ function SpinWheelSvg({ rotation, size = 288 }: { rotation: number; size?: numbe
       <circle cx={cx} cy={cy} r={size * 0.065} fill="#1a1a2e" stroke="hsl(43 74% 52%)" strokeWidth="3" />
       <circle cx={cx} cy={cy} r={size * 0.028} fill="hsl(43 74% 52%)" />
     </svg>
+  );
+}
+
+function EmailVerifyView({ user, onBack, onVerified }: { user: AuthUser | null; onBack: () => void; onVerified: () => void }) {
+  const [code, setCode] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [error, setError] = useState('');
+  const [cooldown, setCooldown] = useState(0);
+  const [sent, setSent] = useState(false);
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = setInterval(() => setCooldown(c => Math.max(0, c - 1)), 1000);
+    return () => clearInterval(t);
+  }, [cooldown]);
+
+  const sendCode = async () => {
+    setResending(true); setError('');
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+    try {
+      const res = await fetch(`${AUTH_API}?action=send-verification`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSent(true);
+        setCooldown(60);
+        toast.success('Код отправлен на почту');
+      } else {
+        setError(data.error || 'Не удалось отправить код');
+        if (res.status === 429) setCooldown(60);
+      }
+    } catch {
+      setError('Ошибка сети, попробуй снова');
+    } finally {
+      setResending(false);
+    }
+  };
+
+  // Автоматически отправляем код при первом открытии экрана
+  useEffect(() => { sendCode(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  const handleVerify = async () => {
+    if (code.length !== 6) { setError('Введи 6-значный код'); return; }
+    setLoading(true); setError('');
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+    try {
+      const res = await fetch(`${AUTH_API}?action=verify-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+        body: JSON.stringify({ code }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast.success('Email подтверждён!');
+        onVerified();
+        onBack();
+      } else {
+        setError(data.error || 'Неверный код');
+      }
+    } catch {
+      setError('Ошибка сети, попробуй снова');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="space-y-5 animate-float-up">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold shrink-0">
+          <Icon name="ArrowLeft" size={20} />
+        </button>
+        <div>
+          <h2 className="font-display text-xl font-bold">Подтверждение email</h2>
+          <p className="text-xs text-muted-foreground">Защита от мошенничества при выводе</p>
+        </div>
+      </div>
+
+      <div className="glass rounded-2xl p-5 flex flex-col items-center gap-3 text-center">
+        <div className="w-14 h-14 rounded-2xl gold-gradient flex items-center justify-center glow-gold">
+          <Icon name="Mail" size={26} className="text-background" />
+        </div>
+        <div>
+          <p className="text-sm text-muted-foreground">Код отправлен на</p>
+          <p className="font-semibold">{user?.email}</p>
+        </div>
+        {sent && (
+          <p className="text-xs text-emerald-400 flex items-center gap-1">
+            <Icon name="CheckCircle" size={13} /> Письмо отправлено, проверь папку «Спам»
+          </p>
+        )}
+      </div>
+
+      <div className="space-y-3">
+        <div>
+          <label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">Код из письма</label>
+          <input
+            className="w-full bg-background/60 border border-gold/20 rounded-xl px-4 py-3 outline-none focus:border-gold/50 transition-colors text-foreground text-center font-display text-2xl tracking-[0.5em] placeholder:tracking-normal placeholder:text-base"
+            placeholder="000000"
+            value={code}
+            onChange={e => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+            inputMode="numeric"
+            maxLength={6}
+          />
+        </div>
+
+        {error && (
+          <div className="flex items-center gap-2 text-xs text-red-400">
+            <Icon name="AlertCircle" size={14} /> {error}
+          </div>
+        )}
+
+        <Button onClick={handleVerify} disabled={loading || code.length !== 6}
+          className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50">
+          {loading ? <Icon name="Loader" size={20} className="animate-spin" /> : 'Подтвердить'}
+        </Button>
+
+        <button onClick={sendCode} disabled={resending || cooldown > 0}
+          className="w-full text-center text-sm text-muted-foreground hover:text-gold transition-colors disabled:opacity-50 py-2">
+          {cooldown > 0 ? `Повторить через ${cooldown} сек.` : resending ? 'Отправка...' : 'Отправить код повторно'}
+        </button>
+      </div>
+    </div>
   );
 }
 

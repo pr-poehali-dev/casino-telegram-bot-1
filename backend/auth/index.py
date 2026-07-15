@@ -4,6 +4,9 @@ import hashlib
 import secrets
 import random
 import base64
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 import psycopg2
 import boto3
 
@@ -29,6 +32,42 @@ MAX_BET              = 20_000  # максимальная ставка за од
 MAX_WIN_MULTIPLIER   = 200     # максимально допустимый множитель выигрыша (защита от подделки result)
 BET_RATE_WINDOW_SEC  = 10      # окно анти-спама
 BET_RATE_MAX_COUNT   = 15      # макс. ставок за окно
+
+# ── Email-верификация ───────────────────────────────────────────────────────
+EMAIL_CODE_TTL_MIN   = 15   # время жизни кода (минут)
+EMAIL_CODE_MAX_ATTEMPTS = 5  # макс. попыток ввода кода
+EMAIL_RESEND_COOLDOWN_SEC = 60  # антиспам на повторную отправку
+
+
+def send_email(to: str, subject: str, html: str):
+    """Отправка email через Gmail SMTP"""
+    gmail_user = os.environ.get('GMAIL_USER', '')
+    gmail_pass = os.environ.get('GMAIL_APP_PASSWORD', '')
+    if not gmail_user or not gmail_pass or not to:
+        return
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = subject
+    msg['From'] = f'Casino Notifications <{gmail_user}>'
+    msg['To'] = to
+    msg.attach(MIMEText(html, 'html', 'utf-8'))
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=10) as server:
+            server.login(gmail_user, gmail_pass)
+            server.sendmail(gmail_user, to, msg.as_string())
+    except Exception:
+        pass
+
+
+def send_verification_code(email: str, code: str):
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;background:#151521;color:#fff;border-radius:16px;">
+      <h2 style="color:#f5c842;margin-top:0;">Подтверждение email</h2>
+      <p style="color:#bbb;font-size:14px;">Твой код подтверждения:</p>
+      <div style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#f5c842;text-align:center;padding:20px 0;">{code}</div>
+      <p style="color:#888;font-size:13px;">Код действителен {EMAIL_CODE_TTL_MIN} минут. Если ты не запрашивал код — просто проигнорируй письмо.</p>
+    </div>
+    """
+    send_email(email, f'{code} — код подтверждения', html)
 
 
 def calc_vip(total_deposited: float) -> dict:
@@ -67,7 +106,7 @@ def get_user_by_token(cur, token: str):
     cur.execute("""
         SELECT u.id, u.email, u.username, u.balance, u.referral_code,
                u.vip_level, u.total_deposited, u.cashback_available, u.avatar_url,
-               u.first_deposit_bonus_claimed
+               u.first_deposit_bonus_claimed, u.email_verified
         FROM sessions s JOIN users u ON s.user_id = u.id
         WHERE s.token = %s AND s.expires_at > NOW()
     """, (token,))
@@ -92,6 +131,7 @@ def user_to_dict(u) -> dict:
         'next_vip_emoji': nxt['emoji'] if nxt else None,
         'avatar_url': u[8],
         'first_deposit_bonus_claimed': bool(u[9]) if len(u) > 9 else False,
+        'email_verified': bool(u[10]) if len(u) > 10 else False,
     }
 
 
@@ -103,6 +143,8 @@ def handler(event: dict, context) -> dict:
     GET  ?action=me        X-Auth-Token
     POST ?action=logout    X-Auth-Token
     POST ?action=balance   { delta } + X-Auth-Token
+    POST ?action=send-verification  X-Auth-Token — отправить/повторить код на email
+    POST ?action=verify-email       { code } + X-Auth-Token — подтвердить код
     GET  ?action=order-status&session_id=...
     """
     if event.get('httpMethod') == 'OPTIONS':
@@ -181,7 +223,20 @@ def handler(event: dict, context) -> dict:
 
         session_token = secrets.token_hex(32)
         cur.execute("INSERT INTO sessions (user_id, token) VALUES (%s, %s)", (user_id, session_token))
+
+        # Генерируем и отправляем код подтверждения email (не блокирует регистрацию)
+        code = f"{random.randint(0, 999999):06d}"
+        cur.execute("""
+            INSERT INTO email_verifications (user_id, code, expires_at)
+            VALUES (%s, %s, NOW() + make_interval(mins => %s))
+        """, (user_id, code, EMAIL_CODE_TTL_MIN))
+
         conn.commit(); cur.close(); conn.close()
+
+        try:
+            send_verification_code(email, code)
+        except Exception:
+            pass
 
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
             'token': session_token,
@@ -193,6 +248,7 @@ def handler(event: dict, context) -> dict:
                 'next_vip_level': 'bronze', 'next_vip_label': 'Bronze',
                 'next_vip_min': 5000, 'next_vip_emoji': '🥉',
                 'avatar_url': None, 'can_spin': True, 'last_spin_at': None,
+                'email_verified': False,
             }
         }), 'isBase64Encoded': False}
 
@@ -204,7 +260,7 @@ def handler(event: dict, context) -> dict:
         cur.execute("""
             SELECT id, email, username, balance, referral_code,
                    vip_level, total_deposited, cashback_available,
-                   avatar_url, last_spin_at
+                   avatar_url, first_deposit_bonus_claimed, email_verified
             FROM users WHERE email = %s AND password_hash = %s AND is_active = TRUE
         """, (email, hash_password(password)))
         user = cur.fetchone()
@@ -236,6 +292,113 @@ def handler(event: dict, context) -> dict:
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
             'user': user_to_dict(user)
         }), 'isBase64Encoded': False}
+
+    # ── SEND VERIFICATION (запросить/повторно отправить код) ──
+    if action == 'send-verification' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        if bool(user[10]):
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Email уже подтверждён'}), 'isBase64Encoded': False}
+
+        # Антиспам: не чаще одного письма в EMAIL_RESEND_COOLDOWN_SEC секунд
+        cur.execute("""
+            SELECT EXTRACT(EPOCH FROM (NOW() - created_at)) FROM email_verifications
+            WHERE user_id = %s ORDER BY created_at DESC LIMIT 1
+        """, (user[0],))
+        last = cur.fetchone()
+        if last and last[0] is not None and last[0] < EMAIL_RESEND_COOLDOWN_SEC:
+            wait = int(EMAIL_RESEND_COOLDOWN_SEC - last[0])
+            cur.close(); conn.close()
+            return {'statusCode': 429, 'headers': HEADERS,
+                    'body': json.dumps({'error': f'Подожди {wait} сек. перед повторной отправкой'}),
+                    'isBase64Encoded': False}
+
+        code = f"{random.randint(0, 999999):06d}"
+        cur.execute("""
+            INSERT INTO email_verifications (user_id, code, expires_at)
+            VALUES (%s, %s, NOW() + make_interval(mins => %s))
+        """, (user[0], code, EMAIL_CODE_TTL_MIN))
+        conn.commit(); cur.close(); conn.close()
+
+        try:
+            send_verification_code(user[1], code)
+        except Exception:
+            pass
+
+        return {'statusCode': 200, 'headers': HEADERS,
+                'body': json.dumps({'success': True}), 'isBase64Encoded': False}
+
+    # ── VERIFY EMAIL (ввод кода) ──
+    if action == 'verify-email' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        if bool(user[10]):
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Email уже подтверждён'}), 'isBase64Encoded': False}
+
+        code_input = str(body.get('code', '')).strip()
+        if not code_input:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Введите код'}), 'isBase64Encoded': False}
+
+        cur.execute("""
+            SELECT id, code, expires_at, attempts FROM email_verifications
+            WHERE user_id = %s AND used = FALSE
+            ORDER BY created_at DESC LIMIT 1
+        """, (user[0],))
+        row = cur.fetchone()
+        if not row:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Код не найден, запроси новый'}), 'isBase64Encoded': False}
+
+        verification_id, real_code, expires_at, attempts = row
+
+        if attempts >= EMAIL_CODE_MAX_ATTEMPTS:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Превышено число попыток. Запроси новый код'}),
+                    'isBase64Encoded': False}
+
+        cur.execute("SELECT NOW() > %s", (expires_at,))
+        is_expired = cur.fetchone()[0]
+        if is_expired:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Код истёк, запроси новый'}), 'isBase64Encoded': False}
+
+        if code_input != real_code:
+            cur.execute("UPDATE email_verifications SET attempts = attempts + 1 WHERE id = %s", (verification_id,))
+            conn.commit(); cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Неверный код'}), 'isBase64Encoded': False}
+
+        cur.execute("UPDATE email_verifications SET used = TRUE WHERE id = %s", (verification_id,))
+        cur.execute("UPDATE users SET email_verified = TRUE, updated_at = NOW() WHERE id = %s", (user[0],))
+        conn.commit(); cur.close(); conn.close()
+
+        return {'statusCode': 200, 'headers': HEADERS,
+                'body': json.dumps({'success': True}), 'isBase64Encoded': False}
 
     # ── BALANCE ──
     if action == 'balance' and http_method == 'POST':

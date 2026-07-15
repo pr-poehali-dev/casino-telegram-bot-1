@@ -42,7 +42,7 @@ def send_telegram(chat_id: str, text: str):
 
 def get_user_by_token(cur, token: str):
     cur.execute("""
-        SELECT u.id, u.balance, u.daily_withdrawn, u.daily_withdraw_date
+        SELECT u.id, u.balance, u.daily_withdrawn, u.daily_withdraw_date, u.email_verified
         FROM sessions s JOIN users u ON s.user_id = u.id
         WHERE s.token = %s AND s.expires_at > NOW()
     """, (token,))
@@ -78,9 +78,11 @@ def handler(event: dict, context) -> dict:
         cur.close(); conn.close()
 
         daily_used = 0.0
+        email_verified = False
         if user:
             last_date = user[3]
             daily_used = float(user[2]) if last_date and last_date >= today else 0.0
+            email_verified = bool(user[4])
 
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
             'min_withdraw':  MIN_WITHDRAW,
@@ -88,6 +90,7 @@ def handler(event: dict, context) -> dict:
             'daily_limit':   DAILY_LIMIT,
             'daily_used':    daily_used,
             'daily_left':    max(0.0, DAILY_LIMIT - daily_used),
+            'email_verified': email_verified,
         }), 'isBase64Encoded': False}
 
     # ── GET: статус заявки ──
@@ -161,14 +164,30 @@ def handler(event: dict, context) -> dict:
                 'body': json.dumps({'error': f'Максимальная сумма одной заявки — {MAX_WITHDRAW:,} ₽'.replace(',', ' ')}),
                 'isBase64Encoded': False}
 
-    # Авторизованный пользователь — дополнительные проверки
+    # Вывод средств доступен только авторизованным пользователям
+    # (анонимные заявки запрещены — иначе проверку email легко обойти)
     user = get_user_by_token(cur, token) if token else None
+    if not user:
+        cur.close(); conn.close()
+        return {'statusCode': 401, 'headers': HEADERS,
+                'body': json.dumps({'error': 'Войдите в аккаунт, чтобы вывести средства'}),
+                'isBase64Encoded': False}
 
     if user:
         user_id    = user[0]
         balance    = float(user[1])
         daily_used = float(user[2])
         last_date  = user[3]
+        email_verified = bool(user[4])
+
+        # Email должен быть подтверждён перед выводом средств (защита от фрода)
+        if not email_verified:
+            cur.close(); conn.close()
+            return {'statusCode': 403, 'headers': HEADERS,
+                    'body': json.dumps({
+                        'error': 'email_not_verified',
+                        'message': 'Подтверди email перед выводом средств'
+                    }), 'isBase64Encoded': False}
 
         # Получаем сегодняшнюю дату из БД
         cur.execute("SELECT CURRENT_DATE")
