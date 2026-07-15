@@ -4093,7 +4093,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
   const [password, setPassword] = useState('');
   const [authed, setAuthed] = useState(false);
   const [authError, setAuthError] = useState('');
-  const [tab, setTab] = useState<'withdrawals' | 'orders' | 'top' | 'promos' | 'support'>('withdrawals');
+  const [tab, setTab] = useState<'withdrawals' | 'orders' | 'top' | 'promos' | 'support' | 'cohorts'>('withdrawals');
   const [topDepositors, setTopDepositors] = useState<{ rank: number; user_id: number; username: string; email: string; deposits_count: number; total_deposited: number; last_deposit: string | null; balance: number }[]>([]);
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
@@ -4234,6 +4234,31 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
     }
   }, []);
 
+  // Когортная аналитика
+  interface CohortWeek { week_offset: number; active_users: number; retention_pct: number; }
+  interface Cohort {
+    cohort_week: string; cohort_size: number; weeks: CohortWeek[];
+    depositors: number; total_deposited: number; deposit_rate_pct: number; avg_deposit_per_depositor: number;
+  }
+  const [cohorts, setCohorts] = useState<Cohort[]>([]);
+  const [cohortMaxOffset, setCohortMaxOffset] = useState(0);
+  const [cohortWeeksRange, setCohortWeeksRange] = useState(8);
+  const [cohortLoading, setCohortLoading] = useState(false);
+
+  const fetchCohorts = useCallback(async (pwd: string, weeks: number) => {
+    setCohortLoading(true);
+    try {
+      const res = await fetch(`${ADMIN_API}?type=cohorts&weeks=${weeks}`, { headers: { 'X-Admin-Password': pwd } });
+      if (res.ok) {
+        const data = await res.json();
+        setCohorts(data.cohorts || []);
+        setCohortMaxOffset(data.max_week_offset || 0);
+      }
+    } finally {
+      setCohortLoading(false);
+    }
+  }, []);
+
   const fetchData = useCallback(async (pwd: string, type: 'withdrawals' | 'orders', statusFilter = '') => {
     setLoading(true);
     try {
@@ -4270,7 +4295,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
     }
   };
 
-  const switchTab = (t: 'withdrawals' | 'orders' | 'top' | 'promos' | 'support') => {
+  const switchTab = (t: 'withdrawals' | 'orders' | 'top' | 'promos' | 'support' | 'cohorts') => {
     setTab(t);
     setFilter('');
     setSelected(null);
@@ -4279,6 +4304,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
     if (t === 'top') fetchTopDepositors(passwordRef.current);
     if (t === 'promos') fetchPromos(passwordRef.current);
     if (t === 'support') fetchSupportChats(passwordRef.current);
+    if (t === 'cohorts') fetchCohorts(passwordRef.current, cohortWeeksRange);
   };
 
   // Запрос разрешения на push-уведомления при входе
@@ -4568,7 +4594,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       </div>
 
       {/* Вкладки */}
-      <div className="grid grid-cols-5 gap-1.5">
+      <div className="grid grid-cols-6 gap-1.5">
         <button onClick={() => switchTab('withdrawals')}
           className={`py-2.5 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all
             ${tab === 'withdrawals' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
@@ -4604,10 +4630,16 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
             <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-red-400" />
           )}
         </button>
+        <button onClick={() => switchTab('cohorts')}
+          className={`py-2.5 rounded-2xl font-semibold text-xs flex flex-col items-center justify-center gap-1 transition-all
+            ${tab === 'cohorts' ? 'gold-gradient text-background glow-gold' : 'glass text-muted-foreground'}`}>
+          <Icon name="Users" size={14} />
+          <span>Когорты</span>
+        </button>
       </div>
 
       {/* Итого */}
-      {tab !== 'top' && tab !== 'promos' && tab !== 'support' && currentList.length > 0 && (
+      {tab !== 'top' && tab !== 'promos' && tab !== 'support' && tab !== 'cohorts' && currentList.length > 0 && (
         <div className="glass rounded-2xl p-4 flex justify-between items-center">
           <span className="text-sm text-muted-foreground">Сумма ({currentList.length} записей)</span>
           <span className="font-display font-bold gold-text text-lg">{totalAmount.toLocaleString('ru')} ₽</span>
@@ -4615,7 +4647,7 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
       )}
 
       {/* Фильтр */}
-      {tab !== 'top' && tab !== 'promos' && tab !== 'support' && <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+      {tab !== 'top' && tab !== 'promos' && tab !== 'support' && tab !== 'cohorts' && <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
         {[{ key: '', label: 'Все' }, ...Object.entries(filterMeta).map(([k, v]) => ({ key: k, label: v.label }))].map(f => (
           <button key={f.key} onClick={() => applyFilter(f.key)}
             className={`shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all
@@ -4625,11 +4657,11 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
         ))}
       </div>}
 
-      {loading && tab !== 'top' && tab !== 'promos' && tab !== 'support' ? (
+      {loading && tab !== 'top' && tab !== 'promos' && tab !== 'support' && tab !== 'cohorts' ? (
         <div className="flex justify-center py-12 text-gold">
           <Icon name="Loader" size={28} className="animate-spin" />
         </div>
-      ) : !loading && tab !== 'top' && tab !== 'promos' && tab !== 'support' && currentList.length === 0 ? (
+      ) : !loading && tab !== 'top' && tab !== 'promos' && tab !== 'support' && tab !== 'cohorts' && currentList.length === 0 ? (
         <div className="glass rounded-2xl p-10 text-center text-muted-foreground text-sm">
           Записей нет
         </div>
@@ -4883,6 +4915,101 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
                 )}
               </button>
             ))
+          )}
+        </div>
+      ) : tab === 'cohorts' ? (
+        <div className="space-y-4">
+          {/* Выбор периода */}
+          <div className="flex gap-2">
+            {[4, 8, 12, 26].map(w => (
+              <button key={w}
+                onClick={() => { setCohortWeeksRange(w); fetchCohorts(passwordRef.current, w); }}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all
+                  ${cohortWeeksRange === w ? 'gold-gradient text-background' : 'glass text-muted-foreground'}`}>
+                {w} нед.
+              </button>
+            ))}
+          </div>
+
+          {cohortLoading ? (
+            <div className="flex justify-center py-12 text-gold">
+              <Icon name="Loader" size={28} className="animate-spin" />
+            </div>
+          ) : cohorts.length === 0 ? (
+            <div className="glass rounded-2xl p-10 text-center text-muted-foreground text-sm">
+              Недостаточно данных для когортного анализа
+            </div>
+          ) : (
+            <>
+              {/* Пояснение */}
+              <div className="glass rounded-xl p-3 flex items-center gap-2 text-xs text-muted-foreground">
+                <Icon name="Info" size={14} className="text-gold shrink-0" />
+                Retention — доля игроков когорты, сыгравших хотя бы раз на N-й неделе после регистрации
+              </div>
+
+              {/* Heatmap retention */}
+              <div className="glass rounded-2xl p-3 overflow-x-auto">
+                <table className="w-full text-xs border-separate" style={{ borderSpacing: '3px' }}>
+                  <thead>
+                    <tr>
+                      <th className="text-left text-muted-foreground font-medium px-2 py-1 sticky left-0 bg-[hsl(var(--card))] z-10">Когорта</th>
+                      <th className="text-center text-muted-foreground font-medium px-2 py-1">Размер</th>
+                      {Array.from({ length: Math.min(cohortMaxOffset, cohortWeeksRange) + 1 }, (_, i) => (
+                        <th key={i} className="text-center text-muted-foreground font-medium px-2 py-1 min-w-[44px]">Н{i}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cohorts.map(c => (
+                      <tr key={c.cohort_week}>
+                        <td className="text-left font-medium px-2 py-1.5 whitespace-nowrap sticky left-0 bg-[hsl(var(--card))] z-10">
+                          {new Date(c.cohort_week).toLocaleDateString('ru', { day: '2-digit', month: '2-digit' })}
+                        </td>
+                        <td className="text-center px-2 py-1.5 text-muted-foreground">{c.cohort_size}</td>
+                        {Array.from({ length: Math.min(cohortMaxOffset, cohortWeeksRange) + 1 }, (_, i) => {
+                          const wd = c.weeks.find(w => w.week_offset === i);
+                          const pct = wd?.retention_pct ?? null;
+                          const bg = pct === null ? 'transparent'
+                            : pct >= 50 ? `hsl(43 74% 52% / ${0.25 + pct / 200})`
+                            : pct >= 20 ? `hsl(43 60% 45% / ${0.15 + pct / 300})`
+                            : pct > 0   ? 'hsl(0 60% 50% / 0.15)'
+                            : 'rgba(255,255,255,0.03)';
+                          return (
+                            <td key={i} className="text-center px-2 py-1.5 rounded-lg font-semibold"
+                              style={{ background: bg, color: pct && pct >= 20 ? 'hsl(43 74% 62%)' : undefined }}>
+                              {pct === null ? '—' : `${pct}%`}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Депозиты по когортам */}
+              <p className="text-xs text-muted-foreground uppercase tracking-wider mt-2">Депозиты по когортам</p>
+              <div className="space-y-2">
+                {cohorts.map(c => (
+                  <div key={c.cohort_week} className="glass rounded-xl p-3 flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-sm font-semibold">
+                        {new Date(c.cohort_week).toLocaleDateString('ru', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">
+                        {c.cohort_size} игроков · {c.depositors} с депозитом ({c.deposit_rate_pct}%)
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-display font-bold gold-text text-sm">{c.total_deposited.toLocaleString('ru')} ₽</div>
+                      {c.depositors > 0 && (
+                        <div className="text-[11px] text-muted-foreground">~{c.avg_deposit_per_depositor.toLocaleString('ru')} ₽/чел</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </div>
       ) : null}

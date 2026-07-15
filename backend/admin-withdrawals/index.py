@@ -38,6 +38,7 @@ def handler(event: dict, context) -> dict:
     Админ-панель: список заявок на вывод и смена статуса.
     GET / — список всех заявок (требует X-Admin-Password)
     POST / — смена статуса { withdrawal_id, status } (требует X-Admin-Password)
+    GET ?type=cohorts&weeks=8 — когортная аналитика (retention + депозиты по неделям регистрации)
     """
     if event.get('httpMethod') == 'OPTIONS':
         return {'statusCode': 200, 'headers': HEADERS, 'body': '', 'isBase64Encoded': False}
@@ -132,6 +133,86 @@ def handler(event: dict, context) -> dict:
             chart = sorted(chart_map.values(), key=lambda x: x['date'])
             return {'statusCode': 200, 'headers': HEADERS,
                     'body': json.dumps({'chart': chart}), 'isBase64Encoded': False}
+
+        # ── Когортная аналитика: удержание игроков по неделям регистрации ──
+        if data_type == 'cohorts':
+            weeks_back = min(int(params.get('weeks', '8')), 26)  # ограничиваем разумным диапазоном
+
+            # Размер каждой когорты (по неделе регистрации)
+            cur.execute("""
+                SELECT DATE_TRUNC('week', created_at)::date AS cohort_week, COUNT(*) AS cohort_size
+                FROM users
+                WHERE created_at >= CURRENT_DATE - INTERVAL '%s weeks'
+                GROUP BY cohort_week
+                ORDER BY cohort_week ASC
+            """ % weeks_back)
+            cohort_sizes = {row[0]: int(row[1]) for row in cur.fetchall()}
+
+            # Активность (сыгранные игры) каждого пользователя по неделям после регистрации
+            cur.execute("""
+                SELECT
+                    DATE_TRUNC('week', u.created_at)::date AS cohort_week,
+                    FLOOR(EXTRACT(EPOCH FROM (gh.created_at - DATE_TRUNC('week', u.created_at))) / 604800)::int AS week_offset,
+                    COUNT(DISTINCT gh.user_id) AS active_users
+                FROM users u
+                JOIN game_history gh ON gh.user_id = u.id
+                WHERE u.created_at >= CURRENT_DATE - INTERVAL '%s weeks'
+                GROUP BY cohort_week, week_offset
+                HAVING FLOOR(EXTRACT(EPOCH FROM (gh.created_at - DATE_TRUNC('week', u.created_at))) / 604800) >= 0
+                ORDER BY cohort_week ASC, week_offset ASC
+            """ % weeks_back)
+            retention_rows = cur.fetchall()
+
+            # Депозиты по когортам (сумма и кол-во депозитов по неделе регистрации)
+            cur.execute("""
+                SELECT
+                    DATE_TRUNC('week', u.created_at)::date AS cohort_week,
+                    COUNT(DISTINCT o.user_id) FILTER (WHERE o.status = 'paid') AS depositors,
+                    COALESCE(SUM(o.amount) FILTER (WHERE o.status = 'paid'), 0) AS total_deposited
+                FROM users u
+                LEFT JOIN orders o ON o.user_id = u.id
+                WHERE u.created_at >= CURRENT_DATE - INTERVAL '%s weeks'
+                GROUP BY cohort_week
+                ORDER BY cohort_week ASC
+            """ % weeks_back)
+            deposit_rows = cur.fetchall()
+            deposit_map = {row[0]: {'depositors': int(row[1]), 'total_deposited': float(row[2])} for row in deposit_rows}
+
+            cur.close(); conn.close()
+
+            # Собираем матрицу retention: cohort_week -> { week_offset: active_users }
+            max_offset = 0
+            retention_map: dict = {}
+            for cohort_week, week_offset, active_users in retention_rows:
+                if cohort_week not in retention_map:
+                    retention_map[cohort_week] = {}
+                retention_map[cohort_week][week_offset] = int(active_users)
+                max_offset = max(max_offset, week_offset)
+
+            cohorts = []
+            for cohort_week in sorted(cohort_sizes.keys()):
+                size = cohort_sizes[cohort_week]
+                weeks_data = []
+                offsets_available = min(max_offset, weeks_back) + 1
+                for offset in range(offsets_available):
+                    active = retention_map.get(cohort_week, {}).get(offset, 0)
+                    pct = round(active / size * 100, 1) if size > 0 else 0.0
+                    weeks_data.append({'week_offset': offset, 'active_users': active, 'retention_pct': pct})
+
+                dep = deposit_map.get(cohort_week, {'depositors': 0, 'total_deposited': 0.0})
+                cohorts.append({
+                    'cohort_week': cohort_week.isoformat(),
+                    'cohort_size': size,
+                    'weeks': weeks_data,
+                    'depositors': dep['depositors'],
+                    'total_deposited': dep['total_deposited'],
+                    'deposit_rate_pct': round(dep['depositors'] / size * 100, 1) if size > 0 else 0.0,
+                    'avg_deposit_per_depositor': round(dep['total_deposited'] / dep['depositors'], 2) if dep['depositors'] > 0 else 0.0,
+                })
+
+            return {'statusCode': 200, 'headers': HEADERS,
+                    'body': json.dumps({'cohorts': cohorts, 'max_week_offset': max_offset}),
+                    'isBase64Encoded': False}
 
         # Сводная статистика
         if data_type == 'stats':
