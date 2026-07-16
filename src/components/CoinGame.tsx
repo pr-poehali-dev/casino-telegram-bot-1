@@ -229,7 +229,7 @@ export default function CoinGame({
 
   const flip = () => {
     if (phase === 'spinning' || phase === 'landing') return;
-    if (bet > balance) return;
+    if (bet <= 0 || bet > balance) return;
 
     onBalanceChange(-bet);
     setWon(null);

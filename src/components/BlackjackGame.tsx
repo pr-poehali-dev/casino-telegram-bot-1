@@ -292,7 +292,7 @@ export default function BlackjackGame({
   };
 
   const startGame = async () => {
-    if (bet > balance) return;
+    if (bet <= 0 || bet > balance) return;
     const ctx = getAudio(); if (ctx) playClick(ctx);
 
     const newDeck = makeDeck();
@@ -379,7 +379,7 @@ export default function BlackjackGame({
   };
 
   const double = async () => {
-    if (phase !== 'playing' || playerCards.length !== 2 || bet > balance) return;
+    if (phase !== 'playing' || playerCards.length !== 2 || bet <= 0 || bet > balance) return;
     const ctx = getAudio(); if (ctx) playClick(ctx);
     onBalanceChange(-bet);
     setDoubled(true);
@@ -627,13 +627,15 @@ export default function BlackjackGame({
 
           <Button
             onClick={startGame}
-            disabled={bet > balance}
+            disabled={bet <= 0 || bet > balance}
             className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50"
           >
             {phase === 'result' ? (
               <><Icon name="RefreshCw" size={20} className="mr-2" /> Новая игра</>
             ) : bet > balance ? (
               'Недостаточно средств'
+            ) : bet <= 0 ? (
+              'Введите ставку'
             ) : (
               <><Icon name="Play" size={20} className="mr-2" /> Раздать карты — {bet.toLocaleString('ru')} ₽</>
             )}

@@ -234,7 +234,7 @@ export default function SlotsGame({
   }, []);
 
   const spin = () => {
-    if (spinning || bet > balance) return;
+    if (spinning || bet <= 0 || bet > balance) return;
 
     onBalanceChange(-bet);
     setResult(null);
@@ -381,13 +381,15 @@ export default function SlotsGame({
 
       <Button
         onClick={spin}
-        disabled={spinning || bet > balance}
+        disabled={spinning || bet <= 0 || bet > balance}
         className="w-full gold-gradient text-background font-bold text-lg h-14 glow-gold disabled:opacity-50"
       >
         {spinning ? (
           <><Icon name="Loader" size={22} className="mr-2 animate-spin" /> Крутим...</>
         ) : bet > balance ? (
           'Недостаточно средств'
+        ) : bet <= 0 ? (
+          'Введите ставку'
         ) : (
           <><Icon name="Play" size={22} className="mr-2" /> Крутить за {bet.toLocaleString('ru')} ₽</>
         )}

@@ -229,7 +229,7 @@ export default function DiceGame({
 
   const roll = () => {
     if (phase === 'rolling') return;
-    if (bet > balance) return;
+    if (bet <= 0 || bet > balance) return;
     onBalanceChange(-bet);
     setWon(null);
     setPhase('rolling');

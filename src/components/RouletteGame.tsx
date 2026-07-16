@@ -357,7 +357,7 @@ export default function RouletteGame({
 
   const spin = () => {
     if (phase === 'spinning' || bets.length === 0) return;
-    if (totalBet > balance) return;
+    if (totalBet <= 0 || totalBet > balance) return;
 
     onBalanceChange(-totalBet);
     setPhase('spinning');
