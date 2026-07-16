@@ -78,13 +78,14 @@ function playJackpot(ctx: AC) {
 
 function calcMultiplier(opened: number, mines: number): number {
   if (opened === 0) return 1;
-  let mult = 1;
+  const safe = GRID - mines;
+  let probability = 1;
   for (let i = 0; i < opened; i++) {
-    const safe = GRID - mines;
-    mult *= (safe - i) / (GRID - i);
-    mult *= GRID / (GRID - mines);
+    probability *= (safe - i) / (GRID - i);
   }
-  return Math.max(1, parseFloat((mult * 0.95).toFixed(2)));
+  if (probability <= 0) return 1;
+  const mult = 0.95 / probability;
+  return Math.max(1, parseFloat(mult.toFixed(2)));
 }
 
 type Phase = 'idle' | 'playing' | 'won' | 'lost';
@@ -248,8 +249,8 @@ export default function MinesGame({
             </div>
           </div>
 
-          <button onClick={startGame}
-            className="w-full gold-gradient text-background font-bold h-12 text-base rounded-xl glow-gold flex items-center justify-center gap-2">
+          <button onClick={startGame} disabled={bet > balance || balance <= 0}
+            className="w-full gold-gradient text-background font-bold h-12 text-base rounded-xl glow-gold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
             <Icon name="Bomb" size={18} />
             Начать игру · {bet.toLocaleString('ru')} ₽
           </button>
