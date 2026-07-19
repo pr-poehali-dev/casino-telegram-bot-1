@@ -4,6 +4,7 @@ import { useRobokassa, openPaymentPage } from '@/components/extensions/robokassa
 import Icon from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
+import { exportToExcel } from '@/lib/exportExcel';
 import SlotsGame from '@/components/SlotsGame';
 import CoinGame from '@/components/CoinGame';
 import DiceGame from '@/components/DiceGame';
@@ -4718,15 +4719,81 @@ function AdminView({ onPendingChange }: { onPendingChange?: (n: number) => void 
 
   const totalAmount = currentList.reduce((s, item) => s + item.amount, 0);
 
+  const exportCurrentTab = () => {
+    if (tab === 'withdrawals') {
+      if (withdrawals.length === 0) { toast.error('Нет данных для экспорта'); return; }
+      exportToExcel(withdrawals.map(w => ({
+        'Заявка': w.request_number,
+        'Пользователь': w.user_name || '—',
+        'Email': w.user_email || '—',
+        'Telegram': w.user_telegram || '—',
+        'Способ': w.method,
+        'Реквизиты': w.destination,
+        'Сумма ₽': w.amount,
+        'Статус': STATUS_META[w.status]?.label || w.status,
+        'Дата': new Date(w.created_at).toLocaleString('ru'),
+      })), 'Выводы', 'Выводы');
+      toast.success('Отчёт по выводам скачан');
+    } else if (tab === 'orders') {
+      if (orders.length === 0) { toast.error('Нет данных для экспорта'); return; }
+      exportToExcel(orders.map(o => ({
+        'Заказ': o.order_number,
+        'Пользователь': o.user_name || '—',
+        'Email': o.user_email || '—',
+        'Комментарий': o.order_comment || '—',
+        'Сумма ₽': o.amount,
+        'Статус': ORDER_STATUS_META[o.status]?.label || o.status,
+        'Создан': new Date(o.created_at).toLocaleString('ru'),
+        'Оплачен': o.paid_at ? new Date(o.paid_at).toLocaleString('ru') : '—',
+      })), 'Пополнения', 'Пополнения');
+      toast.success('Отчёт по пополнениям скачан');
+    } else if (tab === 'top') {
+      if (topDepositors.length === 0) { toast.error('Нет данных для экспорта'); return; }
+      exportToExcel(topDepositors.map(t => ({
+        '#': t.rank,
+        'Пользователь': t.username,
+        'Email': t.email,
+        'Депозитов': t.deposits_count,
+        'Сумма ₽': t.total_deposited,
+        'Баланс ₽': t.balance,
+        'Последний депозит': t.last_deposit ? new Date(t.last_deposit).toLocaleString('ru') : '—',
+      })), 'Топ_депозитов', 'Топ');
+      toast.success('Отчёт по топу депозитов скачан');
+    } else if (tab === 'promos') {
+      if (promos.length === 0) { toast.error('Нет данных для экспорта'); return; }
+      exportToExcel(promos.map(p => ({
+        'Код': p.code,
+        'Бонус ₽': p.bonus_amount,
+        'Лимит использований': p.max_uses ?? 'Без лимита',
+        'Использовано': p.uses_count,
+        'Активен': p.is_active ? 'Да' : 'Нет',
+        'Создан': new Date(p.created_at).toLocaleString('ru'),
+        'Истекает': p.expires_at ? new Date(p.expires_at).toLocaleString('ru') : '—',
+      })), 'Промокоды', 'Промокоды');
+      toast.success('Отчёт по промокодам скачан');
+    }
+  };
+
+  const exportableTab = tab === 'withdrawals' || tab === 'orders' || tab === 'top' || tab === 'promos';
+
   return (
     <div className="space-y-4">
       {/* Заголовок */}
       <div className="flex items-center justify-between">
         <SectionTitle title="Админ" subtitle="Панель управления" icon="ShieldCheck" />
-        <button onClick={() => { fetchData(passwordRef.current, tab, filter); fetchStats(passwordRef.current); }}
-          className="w-9 h-9 glass rounded-xl flex items-center justify-center text-gold">
-          <Icon name="RefreshCw" size={16} />
-        </button>
+        <div className="flex items-center gap-2">
+          {exportableTab && (
+            <button onClick={exportCurrentTab}
+              className="h-9 px-3 glass rounded-xl flex items-center gap-1.5 text-emerald-400 text-xs font-semibold">
+              <Icon name="FileSpreadsheet" size={15} />
+              Excel
+            </button>
+          )}
+          <button onClick={() => { fetchData(passwordRef.current, tab, filter); fetchStats(passwordRef.current); }}
+            className="w-9 h-9 glass rounded-xl flex items-center justify-center text-gold">
+            <Icon name="RefreshCw" size={16} />
+          </button>
+        </div>
       </div>
 
       {/* Статистика */}
