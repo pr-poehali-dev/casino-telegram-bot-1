@@ -118,7 +118,73 @@ ACHIEVEMENTS = [
 ]
 
 ALL_GAME_NAMES = {'Слоты', 'Монета', 'Кости', 'Рулетка', 'Блэкджек', 'Мины', 'Краш',
-                   'Колесо', 'Видеопокер', 'Быки/Медведи', 'Hi-Lo', 'Бинго', 'Кено'}
+                   'Колесо', 'Видеопокер', 'Быки/Медведи', 'Hi-Lo', 'Бинго', 'Кено', 'Числа'}
+
+# ── Ежедневные задания ───────────────────────────────────────────────────────
+# Каждое задание: id, name, desc, icon, reward (₽), game (имя игры для фильтра),
+# type: 'play_count' (сыграть N раз) | 'win_streak' (N побед подряд за день)
+DAILY_QUESTS = [
+    {'id': 'mines_play_5',   'name': 'Пять раз в Мины',    'desc': 'Сыграй 5 игр в «Мины» сегодня',      'icon': '💣', 'reward': 50,  'game': 'Мины', 'type': 'play_count', 'target': 5},
+    {'id': 'mines_win_3',    'name': 'Полоса удачи',       'desc': 'Выиграй 3 раза подряд в «Мины»',     'icon': '🔥', 'reward': 100, 'game': 'Мины', 'type': 'win_streak', 'target': 3},
+]
+
+
+def check_and_complete_daily_quests(cur, user_id: int) -> list:
+    """
+    Проверяет прогресс дневных заданий пользователя за текущую дату (по game_history)
+    и начисляет награду за только что выполненные. Возвращает список новых выполненных.
+    """
+    cur.execute("""
+        SELECT quest_id FROM user_daily_quests
+        WHERE user_id = %s AND quest_date = CURRENT_DATE
+    """, (user_id,))
+    completed_today = {row[0] for row in cur.fetchall()}
+
+    newly = []
+    for q in DAILY_QUESTS:
+        qid = q['id']
+        if qid in completed_today:
+            continue
+
+        if q['type'] == 'play_count':
+            cur.execute("""
+                SELECT COUNT(*) FROM game_history
+                WHERE user_id = %s AND game = %s AND created_at::date = CURRENT_DATE
+            """, (user_id, q['game']))
+            count = cur.fetchone()[0] or 0
+            done = count >= q['target']
+        elif q['type'] == 'win_streak':
+            cur.execute("""
+                SELECT is_win FROM game_history
+                WHERE user_id = %s AND game = %s AND created_at::date = CURRENT_DATE
+                ORDER BY created_at DESC LIMIT 20
+            """, (user_id, q['game']))
+            streak = 0
+            for (win,) in cur.fetchall():
+                if win:
+                    streak += 1
+                else:
+                    break
+            done = streak >= q['target']
+        else:
+            done = False
+
+        if done:
+            cur.execute("""
+                INSERT INTO user_daily_quests (user_id, quest_id, quest_date)
+                VALUES (%s, %s, CURRENT_DATE) ON CONFLICT (user_id, quest_id, quest_date) DO NOTHING
+            """, (user_id, qid))
+            if q['reward'] > 0:
+                cur.execute("""
+                    UPDATE users SET balance = balance + %s, updated_at = NOW() WHERE id = %s
+                """, (q['reward'], user_id))
+                cur.execute("""
+                    UPDATE user_daily_quests SET reward_claimed = TRUE
+                    WHERE user_id = %s AND quest_id = %s AND quest_date = CURRENT_DATE
+                """, (user_id, qid))
+            newly.append(q)
+
+    return newly
 
 
 def check_and_unlock_achievements(cur, user_id: int) -> list:
@@ -425,6 +491,7 @@ def handler(event: dict, context) -> dict:
     POST ?action=send-phone-code    { phone } + X-Auth-Token — отправить SMS-код
     POST ?action=verify-phone       { code } + X-Auth-Token — подтвердить телефон
     GET  ?action=achievements       X-Auth-Token — список достижений с прогрессом
+    GET  ?action=quests             X-Auth-Token — список ежедневных заданий с прогрессом
     GET  ?action=loyalty            X-Auth-Token — статус программы лояльности
     POST ?action=redeem-loyalty     { points } + X-Auth-Token — обменять очки на баланс
     GET  ?action=order-status&session_id=...
@@ -1314,12 +1381,14 @@ def handler(event: dict, context) -> dict:
         """, (user[0], game, bet, result, is_win, json.dumps(details)))
 
         new_achievements = check_and_unlock_achievements(cur, user[0])
+        new_quests = check_and_complete_daily_quests(cur, user[0])
         conn.commit(); cur.close(); conn.close()
 
         return {'statusCode': 200, 'headers': HEADERS,
                 'body': json.dumps({
                     'success': True,
                     'new_achievements': new_achievements,
+                    'new_quests': new_quests,
                 }), 'isBase64Encoded': False}
 
     # ── HISTORY (история ставок) ──
@@ -1910,6 +1979,69 @@ def handler(event: dict, context) -> dict:
             'total_unlocked': len(unlocked_map),
             'total_count': len(ACHIEVEMENTS),
             'newly_unlocked': newly,
+        }), 'isBase64Encoded': False}
+
+    # ── QUESTS (ежедневные задания с прогрессом) ──
+    if action == 'quests' and http_method == 'GET':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        newly = check_and_complete_daily_quests(cur, user[0])
+        conn.commit()
+
+        cur.execute("""
+            SELECT quest_id, completed_at FROM user_daily_quests
+            WHERE user_id = %s AND quest_date = CURRENT_DATE
+        """, (user[0],))
+        completed_map = {row[0]: row[1].isoformat() for row in cur.fetchall()}
+
+        items = []
+        for q in DAILY_QUESTS:
+            progress = 0
+            if q['id'] not in completed_map:
+                if q['type'] == 'play_count':
+                    cur.execute("""
+                        SELECT COUNT(*) FROM game_history
+                        WHERE user_id = %s AND game = %s AND created_at::date = CURRENT_DATE
+                    """, (user[0], q['game']))
+                    progress = min(cur.fetchone()[0] or 0, q['target'])
+                elif q['type'] == 'win_streak':
+                    cur.execute("""
+                        SELECT is_win FROM game_history
+                        WHERE user_id = %s AND game = %s AND created_at::date = CURRENT_DATE
+                        ORDER BY created_at DESC LIMIT 20
+                    """, (user[0], q['game']))
+                    streak = 0
+                    for (win,) in cur.fetchall():
+                        if win:
+                            streak += 1
+                        else:
+                            break
+                    progress = min(streak, q['target'])
+            else:
+                progress = q['target']
+
+            items.append({
+                **q,
+                'progress': progress,
+                'completed': q['id'] in completed_map,
+                'completed_at': completed_map.get(q['id']),
+            })
+
+        cur.close(); conn.close()
+
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'quests': items,
+            'total_completed': len(completed_map),
+            'total_count': len(DAILY_QUESTS),
+            'newly_completed': newly,
         }), 'isBase64Encoded': False}
 
     # ── STATS ──

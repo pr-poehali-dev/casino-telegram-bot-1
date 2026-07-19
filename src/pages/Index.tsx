@@ -19,7 +19,7 @@ import BingoGame from '@/components/BingoGame';
 import KenoGame from '@/components/KenoGame';
 import NumberGuessGame from '@/components/NumberGuessGame';
 
-type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard' | 'spin' | 'verify-email' | 'verify-phone' | 'achievements' | 'loyalty';
+type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard' | 'spin' | 'verify-email' | 'verify-phone' | 'achievements' | 'loyalty' | 'quests';
 
 const GAMES = [
   { id: 'roulette', name: 'Рулетка', icon: 'CircleDot', desc: 'Красное или чёрное', accent: 'crimson', emoji: '🎡' },
@@ -77,6 +77,11 @@ interface AuthUser {
 interface Achievement {
   id: string; name: string; desc: string; icon: string; reward: number; category: string;
   unlocked?: boolean; unlocked_at?: string | null;
+}
+
+interface Quest {
+  id: string; name: string; desc: string; icon: string; reward: number; game: string;
+  type: string; target: number; progress?: number; completed?: boolean; completed_at?: string | null;
 }
 
 function useAnimatedNumber(value: number, duration = 600) {
@@ -220,6 +225,20 @@ export default function Index() {
     }
   }, []);
 
+  const notifyNewQuests = useCallback((list?: Quest[]) => {
+    if (!list || list.length === 0) return;
+    list.forEach((q, i) => {
+      setTimeout(() => {
+        toast.success(`${q.icon} Задание выполнено: ${q.name}`, {
+          description: q.reward > 0 ? `+${q.reward.toLocaleString('ru')} ₽ на баланс` : q.desc,
+          duration: 5000,
+        });
+      }, i * 700);
+    });
+    const totalReward = list.reduce((s, q) => s + (q.reward || 0), 0);
+    if (totalReward > 0) setBalance(b => b + totalReward);
+  }, []);
+
   const recordGame = useCallback(async (gameName: string, bet: number, result: number, isWin: boolean, details: object) => {
     const token = localStorage.getItem(AUTH_TOKEN_KEY);
     if (!token) return;
@@ -227,8 +246,11 @@ export default function Index() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
       body: JSON.stringify({ game: gameName, bet, result, is_win: isWin, details }),
-    }).then(r => r.json()).then(d => notifyNewAchievements(d.new_achievements)).catch(() => {});
-  }, [notifyNewAchievements]);
+    }).then(r => r.json()).then(d => {
+      notifyNewAchievements(d.new_achievements);
+      notifyNewQuests(d.new_quests);
+    }).catch(() => {});
+  }, [notifyNewAchievements, notifyNewQuests]);
 
   // Синхронизируем баланс с БД при изменении.
   // Баланс обновляется оптимистично, но при отказе сервера (лимит ставки,
@@ -454,6 +476,7 @@ export default function Index() {
               {section === 'verify-email' && <EmailVerifyView user={user} onBack={() => setSection('profile')} onVerified={() => handleUserUpdate({ email_verified: true })} />}
               {section === 'verify-phone' && <PhoneVerifyView user={user} onBack={() => setSection('withdraw')} onVerified={() => handleUserUpdate({ phone_verified: true })} />}
               {section === 'achievements' && <AchievementsView onBack={() => setSection('profile')} />}
+              {section === 'quests' && <QuestsView onBack={() => setSection('profile')} openGame={openGame} />}
               {section === 'loyalty' && <LoyaltyView onBack={() => setSection('profile')} onBalanceChange={syncBalance} onUserUpdate={handleUserUpdate} />}
             </>
           )}
@@ -2189,6 +2212,7 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
     { name: 'Колесо фортуны 🎡', icon: 'RefreshCw', action: () => setSection('spin'), highlight: true },
     { name: 'История игр', icon: 'History', action: () => setSection('history') },
     { name: 'Достижения 🏆', icon: 'Award', action: () => setSection('achievements') },
+    { name: 'Задания 📋', icon: 'ListChecks', action: () => setSection('quests') },
     { name: 'Программа лояльности ⭐', icon: 'Star', action: () => setSection('loyalty'), highlight: true },
     { name: 'Пригласить друга', icon: 'UserPlus', action: () => setSection('referral'), highlight: true },
     { name: 'Статистика', icon: 'TrendingUp', action: () => setSection('stats') },
@@ -3388,6 +3412,115 @@ function AchievementsView({ onBack }: { onBack: () => void }) {
             </div>
           </div>
         ))
+      )}
+    </div>
+  );
+}
+
+function QuestsView({ onBack, openGame }: { onBack: () => void; openGame: (id: string) => void }) {
+  const [quests, setQuests] = useState<Quest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [totalCompleted, setTotalCompleted] = useState(0);
+
+  useEffect(() => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY) || '';
+    fetch(`${AUTH_API}?action=quests`, { headers: { 'X-Auth-Token': token } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d) {
+          setQuests(d.quests || []);
+          setTotalCompleted(d.total_completed || 0);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const total = quests.length;
+  const progressPct = total > 0 ? Math.round((totalCompleted / total) * 100) : 0;
+
+  return (
+    <div className="space-y-5 animate-float-up">
+      <div className="flex items-center gap-3">
+        <button onClick={onBack} className="w-10 h-10 rounded-xl glass flex items-center justify-center text-gold shrink-0">
+          <Icon name="ArrowLeft" size={20} />
+        </button>
+        <div>
+          <h2 className="font-display text-xl font-bold">Задания</h2>
+          <p className="text-xs text-muted-foreground">Ежедневные цели с наградой</p>
+        </div>
+      </div>
+
+      {/* Общий прогресс */}
+      <div className="glass rounded-2xl p-5">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-semibold">Выполнено сегодня</span>
+          <span className="text-sm text-gold font-bold">{totalCompleted} / {total}</span>
+        </div>
+        <div className="w-full h-2.5 bg-white/5 rounded-full overflow-hidden">
+          <div className="h-full gold-gradient rounded-full transition-all" style={{ width: `${progressPct}%` }} />
+        </div>
+        <p className="text-[11px] text-muted-foreground mt-2">Задания обновляются каждый день в полночь</p>
+      </div>
+
+      {loading ? (
+        <div className="flex justify-center py-10">
+          <Icon name="Loader" size={24} className="animate-spin text-gold" />
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {quests.map(q => {
+            const progress = q.completed ? q.target : (q.progress || 0);
+            const pct = Math.min(100, Math.round((progress / q.target) * 100));
+            return (
+              <div key={q.id}
+                className={`glass rounded-2xl p-4 flex flex-col gap-2.5 transition-all ${
+                  q.completed ? 'border border-gold/30 glow-gold' : ''
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="text-3xl shrink-0">{q.icon}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-bold leading-tight">{q.name}</div>
+                    <div className="text-[11px] text-muted-foreground leading-tight mt-0.5">{q.desc}</div>
+                  </div>
+                  {q.reward > 0 && (
+                    <span className={`shrink-0 text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                      q.completed ? 'bg-gold/15 text-gold' : 'bg-white/5 text-muted-foreground'
+                    }`}>
+                      +{q.reward.toLocaleString('ru')} ₽
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="flex-1 h-2 bg-white/5 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${q.completed ? 'gold-gradient' : 'bg-gold/50'}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  <span className="text-[11px] text-muted-foreground shrink-0 tabular-nums">
+                    {progress}/{q.target}
+                  </span>
+                </div>
+
+                {q.completed ? (
+                  <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-semibold">
+                    <Icon name="CheckCircle" size={12} /> Выполнено
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => openGame(GAMES.find(g => g.name === q.game)?.id || '')}
+                    className="text-[11px] font-semibold text-gold flex items-center gap-1 hover:underline w-fit"
+                  >
+                    <Icon name="Play" size={12} /> Играть в «{q.game}»
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
