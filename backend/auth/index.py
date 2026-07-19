@@ -508,6 +508,9 @@ def handler(event: dict, context) -> dict:
     POST ?action=redeem-loyalty     { points } + X-Auth-Token — обменять очки на баланс
     POST ?action=telegram-link-code X-Auth-Token — получить код/ссылку для привязки Telegram
     POST ?action=telegram-unlink    X-Auth-Token — отвязать Telegram
+    GET  ?action=push-vapid-key     — публичный VAPID-ключ для подписки на push
+    POST ?action=push-subscribe     { endpoint, keys } + X-Auth-Token — сохранить push-подписку
+    POST ?action=push-unsubscribe   { endpoint? } + X-Auth-Token — удалить push-подписку(и)
     GET  ?action=order-status&session_id=...
     """
     if event.get('httpMethod') == 'OPTIONS':
@@ -752,6 +755,73 @@ def handler(event: dict, context) -> dict:
             UPDATE users SET telegram_chat_id = NULL, telegram_username = NULL, telegram_link_code = NULL
             WHERE id = %s
         """, (user[0],))
+        conn.commit(); cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({'success': True}), 'isBase64Encoded': False}
+
+    # ── PUSH: публичный VAPID-ключ для подписки в браузере ──
+    if action == 'push-vapid-key' and http_method == 'GET':
+        cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'public_key': os.environ.get('VAPID_PUBLIC_KEY', ''),
+        }), 'isBase64Encoded': False}
+
+    # ── PUSH: сохранить подписку браузера ──
+    if action == 'push-subscribe' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        try:
+            payload = json.loads(event.get('body') or '{}')
+        except Exception:
+            payload = {}
+
+        endpoint = str(payload.get('endpoint', ''))
+        keys = payload.get('keys') or {}
+        p256dh = str(keys.get('p256dh', ''))
+        auth_key = str(keys.get('auth', ''))
+
+        if not endpoint or not p256dh or not auth_key:
+            cur.close(); conn.close()
+            return {'statusCode': 400, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Некорректная подписка'}), 'isBase64Encoded': False}
+
+        cur.execute("""
+            INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id, endpoint) DO UPDATE SET p256dh = EXCLUDED.p256dh, auth = EXCLUDED.auth
+        """, (user[0], endpoint, p256dh, auth_key))
+        conn.commit(); cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({'success': True}), 'isBase64Encoded': False}
+
+    # ── PUSH: удалить подписку браузера ──
+    if action == 'push-unsubscribe' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        try:
+            payload = json.loads(event.get('body') or '{}')
+        except Exception:
+            payload = {}
+        endpoint = str(payload.get('endpoint', ''))
+
+        if endpoint:
+            cur.execute("DELETE FROM push_subscriptions WHERE user_id = %s AND endpoint = %s", (user[0], endpoint))
+        else:
+            cur.execute("DELETE FROM push_subscriptions WHERE user_id = %s", (user[0],))
         conn.commit(); cur.close(); conn.close()
         return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({'success': True}), 'isBase64Encoded': False}
 

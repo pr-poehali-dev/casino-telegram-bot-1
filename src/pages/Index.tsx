@@ -19,6 +19,7 @@ import HiLoGame from '@/components/HiLoGame';
 import BingoGame from '@/components/BingoGame';
 import KenoGame from '@/components/KenoGame';
 import NumberGuessGame from '@/components/NumberGuessGame';
+import { isPushSubscribed, subscribeToPush, unsubscribeFromPush } from '@/lib/push';
 
 type Section = 'home' | 'deposit' | 'withdraw' | 'games' | 'stats' | 'profile' | 'support' | 'admin' | 'referral' | 'daily' | 'history' | 'leaderboard' | 'spin' | 'verify-email' | 'verify-phone' | 'achievements' | 'loyalty' | 'quests';
 
@@ -2164,6 +2165,40 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
     return () => clearInterval(iv);
   }, [tgDeepLink, user?.telegram_linked, onUserUpdate]);
 
+  // Push-уведомления браузера
+  const [pushSupported] = useState(() => 'serviceWorker' in navigator && 'PushManager' in window);
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushLoading, setPushLoading] = useState(false);
+
+  useEffect(() => {
+    if (!pushSupported) return;
+    isPushSubscribed().then(setPushSubscribed);
+  }, [pushSupported]);
+
+  const enablePush = async () => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!token) return;
+    setPushLoading(true);
+    const ok = await subscribeToPush(token);
+    if (ok) {
+      setPushSubscribed(true);
+      toast.success('Уведомления в браузере подключены!');
+    } else {
+      toast.error('Не удалось включить уведомления — проверь разрешения браузера');
+    }
+    setPushLoading(false);
+  };
+
+  const disablePush = async () => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!token) return;
+    setPushLoading(true);
+    await unsubscribeFromPush(token);
+    setPushSubscribed(false);
+    toast.success('Уведомления отключены');
+    setPushLoading(false);
+  };
+
   // Аватар
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [avatarLoading, setAvatarLoading] = useState(false);
@@ -2506,6 +2541,34 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
           </button>
         )}
       </div>
+
+      {/* Push-уведомления браузера */}
+      {pushSupported && (
+        <div className="animate-float-up glass rounded-2xl p-4 flex items-center gap-4" style={{ animationDelay: '115ms' }}>
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0 bg-gold/15 border border-gold/40">
+            <Icon name="Bell" size={20} className="text-gold" />
+          </div>
+          <div className="flex-1">
+            <p className="font-semibold text-sm">Push-уведомления</p>
+            <p className="text-xs text-muted-foreground">
+              {pushSubscribed
+                ? 'Подключено в этом браузере'
+                : 'Одобренный вывод и бонус — прямо на устройство'}
+            </p>
+          </div>
+          {pushSubscribed ? (
+            <button onClick={disablePush} disabled={pushLoading}
+              className="shrink-0 font-bold text-sm px-4 py-2 rounded-xl transition-all disabled:opacity-50 glass text-muted-foreground hover:text-red-400">
+              {pushLoading ? <Icon name="Loader" size={16} className="animate-spin" /> : 'Отключить'}
+            </button>
+          ) : (
+            <button onClick={enablePush} disabled={pushLoading}
+              className="shrink-0 font-bold text-sm px-4 py-2 rounded-xl transition-all disabled:opacity-50 bg-gold/20 text-gold border border-gold/50">
+              {pushLoading ? <Icon name="Loader" size={16} className="animate-spin" /> : 'Подключить'}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Переключатель темы */}
       <button onClick={onToggleTheme}

@@ -3,6 +3,7 @@ import os
 import psycopg2
 import urllib.request
 from datetime import datetime
+from push_utils import send_push_to_user
 
 HEADERS = {
     'Access-Control-Allow-Origin': '*',
@@ -351,18 +352,15 @@ def handler(event: dict, context) -> dict:
         cur.execute("""
             UPDATE withdrawals SET status = %s, updated_at = CURRENT_TIMESTAMP
             WHERE id = %s
-            RETURNING id, request_number, user_name, user_telegram, amount, method
+            RETURNING id, request_number, user_name, user_telegram, amount, method, user_id
         """, (new_status, withdrawal_id))
         row = cur.fetchone()
         if not row:
             cur.close(); conn.close()
             return {'statusCode': 404, 'headers': HEADERS,
                     'body': json.dumps({'error': 'Заявка не найдена'}), 'isBase64Encoded': False}
-        conn.commit()
-        cur.close()
-        conn.close()
 
-        _, request_number, user_name, user_telegram, amount, method_name = row
+        _, request_number, user_name, user_telegram, amount, method_name, user_id = row
         amount_str = f"{float(amount):,.0f}".replace(',', ' ')
 
         STATUS_LABELS = {
@@ -382,6 +380,19 @@ def handler(event: dict, context) -> dict:
                 f"Статус: {STATUS_LABELS.get(new_status, new_status)}"
             )
             send_telegram(f"@{user_telegram}", tg_text)
+
+        # Push-уведомление в браузер игроку при одобрении вывода
+        if new_status == 'paid' and user_id:
+            send_push_to_user(
+                cur, user_id,
+                title='✅ Вывод одобрен!',
+                body=f'Заявка {request_number} на {amount_str} ₽ выплачена',
+                url='/',
+            )
+
+        conn.commit()
+        cur.close()
+        conn.close()
 
         return {'statusCode': 200, 'headers': HEADERS,
                 'body': json.dumps({'success': True, 'status': new_status}),
