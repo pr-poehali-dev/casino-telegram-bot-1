@@ -76,6 +76,8 @@ interface AuthUser {
   loyalty_next_emoji?: string | null;
   telegram_linked?: boolean;
   telegram_username?: string | null;
+  weekend_promo_active?: boolean;
+  weekend_cashback_multiplier?: number;
 }
 
 interface Achievement {
@@ -2488,6 +2490,20 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
         )}
       </div>
 
+      {/* Акция выходного дня */}
+      {user?.weekend_promo_active && (user?.vip_cashback_pct || 0) > 0 && (
+        <div className="animate-float-up rounded-2xl p-4 flex items-center gap-3"
+          style={{ animationDelay: '90ms', background: 'linear-gradient(135deg, rgba(245,200,66,0.18), rgba(245,200,66,0.05))', border: '1px solid rgba(245,200,66,0.4)' }}>
+          <div className="text-2xl shrink-0">🎉</div>
+          <div className="flex-1">
+            <p className="font-bold text-sm text-gold">Акция выходного дня!</p>
+            <p className="text-xs text-muted-foreground">
+              Кешбэк x{user.weekend_cashback_multiplier || 2} — сегодня и завтра
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Кешбэк */}
       {(user?.vip_cashback_pct || 0) > 0 && (
         <div className="animate-float-up glass rounded-2xl p-4 flex items-center gap-4" style={{ animationDelay: '100ms' }}>
@@ -2496,7 +2512,11 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
             <Icon name="RotateCcw" size={22} style={{ color: vipColor }} />
           </div>
           <div className="flex-1">
-            <p className="font-semibold text-sm">Кешбэк {user?.vip_cashback_pct}% · раз в неделю</p>
+            <p className="font-semibold text-sm">
+              Кешбэк {user?.weekend_promo_active ? (user?.vip_cashback_pct || 0) * (user?.weekend_cashback_multiplier || 2) : user?.vip_cashback_pct}%
+              {user?.weekend_promo_active && <span className="text-gold"> (x{user.weekend_cashback_multiplier || 2} акция!)</span>}
+              {' '}· раз в неделю
+            </p>
             <p className="text-xs text-muted-foreground">
               {cashbackAvailable > 0
                 ? `Доступно: ${cashbackAvailable.toLocaleString('ru')} ₽`

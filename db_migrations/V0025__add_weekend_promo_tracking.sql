@@ -1,0 +1,1 @@
+ALTER TABLE users ADD COLUMN IF NOT EXISTS weekend_promo_sent_at TIMESTAMP;

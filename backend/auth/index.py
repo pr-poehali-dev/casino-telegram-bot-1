@@ -57,6 +57,11 @@ PHONE_VERIFY_WITHDRAW_THRESHOLD = 25_000  # сумма вывода, с кото
 
 # ── Кешбэк ────────────────────────────────────────────────────────────────────
 CASHBACK_CLAIM_INTERVAL = datetime.timedelta(days=7)  # получать кешбэк можно раз в неделю
+WEEKEND_CASHBACK_MULTIPLIER = 2  # акция выходного дня: кешбэк x2 в сб/вс
+
+
+def is_weekend_now() -> bool:
+    return datetime.datetime.utcnow().isoweekday() in (6, 7)
 
 # ── Программа лояльности ─────────────────────────────────────────────────────
 LOYALTY_POINTS_PER_RUB   = 0.1    # очков за 1 ₽ ставки (без учёта множителя уровня)
@@ -487,6 +492,8 @@ def user_to_dict(u) -> dict:
         'cashback_next_claim_at': cashback_next_claim_at,
         'telegram_linked': bool(u[16]) if len(u) > 16 else False,
         'telegram_username': u[17] if len(u) > 17 else None,
+        'weekend_promo_active': is_weekend_now(),
+        'weekend_cashback_multiplier': WEEKEND_CASHBACK_MULTIPLIER,
     }
 
 
@@ -1129,10 +1136,12 @@ def handler(event: dict, context) -> dict:
                             'body': json.dumps({'error': 'Некорректная сумма выигрыша'}), 'isBase64Encoded': False}
 
         # При проигрыше (delta < 0) начисляем кешбэк согласно VIP-уровню
+        # По выходным действует акция — кешбэк удваивается
         vip = calc_vip(float(user[6]))
         cashback_earned = 0.0
         if delta < 0 and vip['cashback_pct'] > 0:
-            cashback_earned = round(abs(delta) * vip['cashback_pct'] / 100, 2)
+            effective_pct = vip['cashback_pct'] * (WEEKEND_CASHBACK_MULTIPLIER if is_weekend_now() else 1)
+            cashback_earned = round(abs(delta) * effective_pct / 100, 2)
 
         # Очки лояльности начисляются за каждую ставку (в обе стороны — выигрыш и проигрыш
         # засчитываются только один раз, за списание ставки, т.е. delta < 0)
