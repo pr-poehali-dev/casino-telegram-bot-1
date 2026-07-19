@@ -1,4 +1,6 @@
 {
+  "telegram-webhook": "https://functions.poehali.dev/b62aa56d-bbf4-4743-a621-9f7a0242136c",
+  "daily-bonus-reminder": "https://functions.poehali.dev/5b8414b2-62e4-4836-9003-697ff9434316",
   "ab-tests": "https://functions.poehali.dev/cb635d45-413c-4c9a-9279-91ca31d6f5c6",
   "auth": "https://functions.poehali.dev/e956557c-ce79-4797-8cec-5934cb2924d8",
   "admin-withdrawals": "https://functions.poehali.dev/fc579833-522a-4863-abbc-24eece05648f",

@@ -438,7 +438,8 @@ def get_user_by_token(cur, token: str):
         SELECT u.id, u.email, u.username, u.balance, u.referral_code,
                u.vip_level, u.total_deposited, u.cashback_available, u.avatar_url,
                u.first_deposit_bonus_claimed, u.email_verified, u.phone, u.phone_verified,
-               u.loyalty_points, u.loyalty_points_lifetime, u.cashback_claimed_at
+               u.loyalty_points, u.loyalty_points_lifetime, u.cashback_claimed_at,
+               u.telegram_chat_id, u.telegram_username
         FROM sessions s JOIN users u ON s.user_id = u.id
         WHERE s.token = %s AND s.expires_at > NOW()
     """, (token,))
@@ -484,6 +485,8 @@ def user_to_dict(u) -> dict:
         'loyalty_next_min': loyalty_next['min_points'] if loyalty_next else None,
         'loyalty_next_emoji': loyalty_next['emoji'] if loyalty_next else None,
         'cashback_next_claim_at': cashback_next_claim_at,
+        'telegram_linked': bool(u[16]) if len(u) > 16 else False,
+        'telegram_username': u[17] if len(u) > 17 else None,
     }
 
 
@@ -503,6 +506,8 @@ def handler(event: dict, context) -> dict:
     GET  ?action=quests             X-Auth-Token — список ежедневных заданий с прогрессом
     GET  ?action=loyalty            X-Auth-Token — статус программы лояльности
     POST ?action=redeem-loyalty     { points } + X-Auth-Token — обменять очки на баланс
+    POST ?action=telegram-link-code X-Auth-Token — получить код/ссылку для привязки Telegram
+    POST ?action=telegram-unlink    X-Auth-Token — отвязать Telegram
     GET  ?action=order-status&session_id=...
     """
     if event.get('httpMethod') == 'OPTIONS':
@@ -706,6 +711,49 @@ def handler(event: dict, context) -> dict:
             'token': session_token,
             'user': user_to_dict(user)
         }), 'isBase64Encoded': False}
+
+    # ── TELEGRAM: получить код для привязки аккаунта к боту ──
+    if action == 'telegram-link-code' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        code = secrets.token_hex(8)
+        cur.execute("UPDATE users SET telegram_link_code = %s WHERE id = %s", (code, user[0]))
+        conn.commit(); cur.close(); conn.close()
+
+        bot_username = os.environ.get('TELEGRAM_BOT_USERNAME', '')
+        deep_link = f"https://t.me/{bot_username}?start={code}" if bot_username else None
+
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({
+            'code': code,
+            'deep_link': deep_link,
+        }), 'isBase64Encoded': False}
+
+    # ── TELEGRAM: отвязать аккаунт ──
+    if action == 'telegram-unlink' and http_method == 'POST':
+        if not token:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Не авторизован'}), 'isBase64Encoded': False}
+        user = get_user_by_token(cur, token)
+        if not user:
+            cur.close(); conn.close()
+            return {'statusCode': 401, 'headers': HEADERS,
+                    'body': json.dumps({'error': 'Сессия истекла'}), 'isBase64Encoded': False}
+
+        cur.execute("""
+            UPDATE users SET telegram_chat_id = NULL, telegram_username = NULL, telegram_link_code = NULL
+            WHERE id = %s
+        """, (user[0],))
+        conn.commit(); cur.close(); conn.close()
+        return {'statusCode': 200, 'headers': HEADERS, 'body': json.dumps({'success': True}), 'isBase64Encoded': False}
 
     # ── ME ──
     if action == 'me' and http_method == 'GET':

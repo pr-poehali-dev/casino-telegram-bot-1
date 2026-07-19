@@ -73,6 +73,8 @@ interface AuthUser {
   loyalty_next_label?: string | null;
   loyalty_next_min?: number | null;
   loyalty_next_emoji?: string | null;
+  telegram_linked?: boolean;
+  telegram_username?: string | null;
 }
 
 interface Achievement {
@@ -2103,6 +2105,65 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
   const [cashbackLoading, setCashbackLoading] = useState(false);
   const [localCashback, setLocalCashback] = useState<number | null>(null);
 
+  // Telegram
+  const [tgLoading, setTgLoading] = useState(false);
+  const [tgDeepLink, setTgDeepLink] = useState<string | null>(null);
+
+  const connectTelegram = async () => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!token) return;
+    setTgLoading(true);
+    const res = await fetch(`${AUTH_API}?action=telegram-link-code`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+    });
+    const data = await res.json();
+    if (res.ok && data.deep_link) {
+      setTgDeepLink(data.deep_link);
+      window.open(data.deep_link, '_blank');
+    } else if (res.ok) {
+      toast.error('Бот ещё не настроен, попробуй позже');
+    } else {
+      toast.error(data.error || 'Ошибка');
+    }
+    setTgLoading(false);
+  };
+
+  const disconnectTelegram = async () => {
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!token) return;
+    setTgLoading(true);
+    const res = await fetch(`${AUTH_API}?action=telegram-unlink`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token },
+    });
+    if (res.ok) {
+      onUserUpdate({ telegram_linked: false, telegram_username: null });
+      toast.success('Telegram отключен');
+    } else {
+      toast.error('Ошибка');
+    }
+    setTgLoading(false);
+  };
+
+  // Пока открыта ссылка на бота — периодически проверяем, подключился ли Telegram
+  useEffect(() => {
+    if (!tgDeepLink || user?.telegram_linked) return;
+    const token = localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!token) return;
+    const iv = setInterval(() => {
+      fetch(`${AUTH_API}?action=me`, { headers: { 'X-Auth-Token': token } })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+          if (d?.user?.telegram_linked) {
+            onUserUpdate({ telegram_linked: true, telegram_username: d.user.telegram_username });
+            setTgDeepLink(null);
+            toast.success('Telegram подключен!');
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(iv);
+  }, [tgDeepLink, user?.telegram_linked, onUserUpdate]);
+
   // Аватар
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [avatarLoading, setAvatarLoading] = useState(false);
@@ -2419,6 +2480,32 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
           )}
         </div>
       )}
+
+      {/* Telegram-уведомления */}
+      <div className="animate-float-up glass rounded-2xl p-4 flex items-center gap-4" style={{ animationDelay: '110ms' }}>
+        <div className="w-12 h-12 rounded-xl flex items-center justify-center shrink-0 bg-[#229ED9]/15 border border-[#229ED9]/40">
+          <Icon name="Send" size={20} className="text-[#229ED9]" />
+        </div>
+        <div className="flex-1">
+          <p className="font-semibold text-sm">Telegram-уведомления</p>
+          <p className="text-xs text-muted-foreground">
+            {user?.telegram_linked
+              ? `Подключено${user.telegram_username ? ` · @${user.telegram_username}` : ''}`
+              : 'Напомним забрать ежедневный бонус'}
+          </p>
+        </div>
+        {user?.telegram_linked ? (
+          <button onClick={disconnectTelegram} disabled={tgLoading}
+            className="shrink-0 font-bold text-sm px-4 py-2 rounded-xl transition-all disabled:opacity-50 glass text-muted-foreground hover:text-red-400">
+            {tgLoading ? <Icon name="Loader" size={16} className="animate-spin" /> : 'Отключить'}
+          </button>
+        ) : (
+          <button onClick={connectTelegram} disabled={tgLoading}
+            className="shrink-0 font-bold text-sm px-4 py-2 rounded-xl transition-all disabled:opacity-50 bg-[#229ED9]/20 text-[#229ED9] border border-[#229ED9]/50">
+            {tgLoading ? <Icon name="Loader" size={16} className="animate-spin" /> : 'Подключить'}
+          </button>
+        )}
+      </div>
 
       {/* Переключатель темы */}
       <button onClick={onToggleTheme}
