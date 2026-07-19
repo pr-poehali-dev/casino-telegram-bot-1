@@ -8,6 +8,7 @@ import re
 import smtplib
 import urllib.request
 import urllib.parse
+import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import psycopg2
@@ -53,6 +54,9 @@ PHONE_CODE_TTL_MIN        = 15   # время жизни кода (минут)
 PHONE_CODE_MAX_ATTEMPTS   = 5    # макс. попыток ввода кода
 PHONE_RESEND_COOLDOWN_SEC = 60   # антиспам на повторную отправку
 PHONE_VERIFY_WITHDRAW_THRESHOLD = 25_000  # сумма вывода, с которой требуется телефон (₽)
+
+# ── Кешбэк ────────────────────────────────────────────────────────────────────
+CASHBACK_CLAIM_INTERVAL = datetime.timedelta(days=7)  # получать кешбэк можно раз в неделю
 
 # ── Программа лояльности ─────────────────────────────────────────────────────
 LOYALTY_POINTS_PER_RUB   = 0.1    # очков за 1 ₽ ставки (без учёта множителя уровня)
@@ -434,7 +438,7 @@ def get_user_by_token(cur, token: str):
         SELECT u.id, u.email, u.username, u.balance, u.referral_code,
                u.vip_level, u.total_deposited, u.cashback_available, u.avatar_url,
                u.first_deposit_bonus_claimed, u.email_verified, u.phone, u.phone_verified,
-               u.loyalty_points, u.loyalty_points_lifetime
+               u.loyalty_points, u.loyalty_points_lifetime, u.cashback_claimed_at
         FROM sessions s JOIN users u ON s.user_id = u.id
         WHERE s.token = %s AND s.expires_at > NOW()
     """, (token,))
@@ -447,6 +451,10 @@ def user_to_dict(u) -> dict:
     loyalty_lifetime = int(u[14]) if len(u) > 14 else 0
     loyalty_level = calc_loyalty_level(loyalty_lifetime)
     loyalty_next = next_loyalty_level(loyalty_lifetime)
+    cashback_claimed_at = u[15] if len(u) > 15 else None
+    cashback_next_claim_at = None
+    if cashback_claimed_at:
+        cashback_next_claim_at = (cashback_claimed_at + CASHBACK_CLAIM_INTERVAL).isoformat()
     return {
         'id': u[0], 'email': u[1], 'username': u[2], 'balance': float(u[3]),
         'referral_code': u[4],
@@ -475,6 +483,7 @@ def user_to_dict(u) -> dict:
         'loyalty_next_label': loyalty_next['label'] if loyalty_next else None,
         'loyalty_next_min': loyalty_next['min_points'] if loyalty_next else None,
         'loyalty_next_emoji': loyalty_next['emoji'] if loyalty_next else None,
+        'cashback_next_claim_at': cashback_next_claim_at,
     }
 
 
@@ -1586,15 +1595,29 @@ def handler(event: dict, context) -> dict:
             return {'statusCode': 400, 'headers': HEADERS,
                     'body': json.dumps({'error': 'Нет доступного кешбэка'}), 'isBase64Encoded': False}
 
+        cashback_claimed_at = user[15] if len(user) > 15 else None
+        if cashback_claimed_at:
+            next_claim_at = cashback_claimed_at + CASHBACK_CLAIM_INTERVAL
+            now = datetime.datetime.now(cashback_claimed_at.tzinfo) if cashback_claimed_at.tzinfo else datetime.datetime.now()
+            if now < next_claim_at:
+                cur.close(); conn.close()
+                return {'statusCode': 400, 'headers': HEADERS,
+                        'body': json.dumps({
+                            'error': 'Кешбэк можно забирать раз в неделю',
+                            'next_claim_at': next_claim_at.isoformat(),
+                        }), 'isBase64Encoded': False}
+
         cur.execute("""
             UPDATE users
             SET balance = balance + %s,
                 cashback_available = 0,
                 cashback_claimed_at = NOW(),
                 updated_at = NOW()
-            WHERE id = %s RETURNING balance
+            WHERE id = %s RETURNING balance, cashback_claimed_at
         """, (cashback, user[0]))
-        new_balance = float(cur.fetchone()[0])
+        row = cur.fetchone()
+        new_balance = float(row[0])
+        claimed_at = row[1]
 
         cur.execute("""
             INSERT INTO cashback_history (user_id, amount, period_start, period_end, losses, vip_level, pct)
@@ -1606,6 +1629,7 @@ def handler(event: dict, context) -> dict:
             'success': True,
             'cashback': cashback,
             'new_balance': new_balance,
+            'next_claim_at': (claimed_at + CASHBACK_CLAIM_INTERVAL).isoformat(),
         }), 'isBase64Encoded': False}
 
     # ── LOYALTY: статус программы лояльности ──

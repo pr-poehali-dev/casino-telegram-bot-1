@@ -56,7 +56,7 @@ const AUTH_TOKEN_KEY = 'casino_auth_token';
 interface AuthUser {
   id: number; email: string; username: string; balance: number; referral_code?: string;
   vip_level?: string; vip_label?: string; vip_emoji?: string; vip_cashback_pct?: number;
-  total_deposited?: number; cashback_available?: number;
+  total_deposited?: number; cashback_available?: number; cashback_next_claim_at?: string | null;
   next_vip_level?: string; next_vip_label?: string; next_vip_min?: number; next_vip_emoji?: string;
   avatar_url?: string | null;
   first_deposit_bonus_claimed?: boolean;
@@ -2200,12 +2200,34 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
     if (res.ok) {
       onBalanceChange(data.cashback);
       setLocalCashback(0);
+      onUserUpdate({ cashback_next_claim_at: data.next_claim_at });
       toast.success(`Кешбэк ${data.cashback.toLocaleString('ru')} ₽ зачислен!`);
     } else {
+      if (data.next_claim_at) onUserUpdate({ cashback_next_claim_at: data.next_claim_at });
       toast.error(data.error || 'Ошибка');
     }
     setCashbackLoading(false);
   };
+
+  // Таймер до следующего доступного получения кешбэка (раз в неделю)
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(t);
+  }, []);
+  const nextClaimAt = user?.cashback_next_claim_at ? new Date(user.cashback_next_claim_at).getTime() : 0;
+  const cashbackLocked = nextClaimAt > now;
+  const cashbackTimeLeft = cashbackLocked ? nextClaimAt - now : 0;
+  const cashbackTimeLeftLabel = (() => {
+    if (!cashbackLocked) return '';
+    const totalMin = Math.ceil(cashbackTimeLeft / 60000);
+    const days = Math.floor(totalMin / 1440);
+    const hours = Math.floor((totalMin % 1440) / 60);
+    const mins = totalMin % 60;
+    if (days > 0) return `${days} д ${hours} ч`;
+    if (hours > 0) return `${hours} ч ${mins} мин`;
+    return `${mins} мин`;
+  })();
 
   const items: { name: string; icon: string; action: () => void; danger?: boolean; highlight?: boolean }[] = [
     { name: 'Пополнить баланс', icon: 'Wallet', action: () => setSection('deposit') },
@@ -2378,20 +2400,21 @@ function ProfileView({ setSection, notify, user, onLogout, onBalanceChange, onUs
             <Icon name="RotateCcw" size={22} style={{ color: vipColor }} />
           </div>
           <div className="flex-1">
-            <p className="font-semibold text-sm">Кешбэк {user?.vip_cashback_pct}%</p>
+            <p className="font-semibold text-sm">Кешбэк {user?.vip_cashback_pct}% · раз в неделю</p>
             <p className="text-xs text-muted-foreground">
               {cashbackAvailable > 0
                 ? `Доступно: ${cashbackAvailable.toLocaleString('ru')} ₽`
                 : 'Накапливается с каждого проигрыша'}
+              {cashbackLocked && ` · след. выплата через ${cashbackTimeLeftLabel}`}
             </p>
           </div>
           {cashbackAvailable > 0 && (
-            <button onClick={claimCashback} disabled={cashbackLoading}
+            <button onClick={claimCashback} disabled={cashbackLoading || cashbackLocked}
               className="shrink-0 font-bold text-sm px-4 py-2 rounded-xl transition-all disabled:opacity-50"
               style={{ background: `${vipColor}22`, color: vipColor, border: `1px solid ${vipColor}55` }}>
               {cashbackLoading
                 ? <Icon name="Loader" size={16} className="animate-spin" />
-                : `Забрать`}
+                : cashbackLocked ? cashbackTimeLeftLabel : `Забрать`}
             </button>
           )}
         </div>
