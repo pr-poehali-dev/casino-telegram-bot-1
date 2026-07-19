@@ -198,7 +198,7 @@ export default function HiLoGame({
     setStreak(0);
     setMult(1);
     setHistory([]);
-    setLastResult(null);
+    setLR(null);
     setPayout(0);
     setEndReason(null);
     setPhase('playing');
@@ -283,7 +283,7 @@ export default function HiLoGame({
     setStreak(0);
     setMult(1);
     setHistory([]);
-    setLastResult(null);
+    setLR(null);
     setEndReason(null);
     setPayout(0);
   }
